@@ -45,8 +45,23 @@ Todo se guarda en `localStorage`. Respeta `prefers-reduced-motion`, funciona con
 ```bash
 npm install
 copy .env.example .env   # (o cp en Mac/Linux) — pon tus claves, son opcionales
-npm start                # → http://localhost:8342
+npm start                # → https://localhost:8342
 ```
+
+El servidor sirve **HTTPS** en el puerto 8342 (genera un certificado auto-firmado
+en `server/certs/` la primera vez) y un HTTP de cortesía en `http://127.0.0.1:8343`
+solo para pruebas locales con `curl`.
+
+### 📱 Desde el celular (misma WiFi)
+
+El micrófono de Boti necesita HTTPS: con HTTP por IP, Chrome ni siquiera ofrece
+el permiso de micrófono (solo aparece "Sonido" en los permisos del sitio).
+
+1. Abre **`https://192.168.40.137:8342`** (la IP de tu PC; el servidor la muestra al arrancar).
+2. Chrome dirá **"La conexión no es privada"** (el certificado es auto-firmado, es normal).
+   Toca **Configuración avanzada → Acceder a 192.168.40.137 (sitio no seguro)**.
+   Solo hace falta la primera vez.
+3. Listo: al apretar el botón 🎤, Chrome pedirá el permiso de micrófono normalmente.
 
 Claves en `.env` (ambas opcionales, la app funciona sin ellas):
 

@@ -4,12 +4,18 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import http from 'node:http';
+import https from 'node:https';
 import { fileURLToPath } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
+import selfsigned from 'selfsigned';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
-const PORT = process.env.PORT || 8342;
+const PORT = process.env.PORT || 8342;           // HTTPS (PC y celular por la LAN)
+const HTTP_PORT = process.env.HTTP_PORT || 8343; // HTTP solo 127.0.0.1 (curl/pruebas)
 
 const LLM_KEY = process.env.ANTHROPIC_API_KEY || '';
 const TTS_KEY = process.env.ELEVENLABS_API_KEY || '';
@@ -167,8 +173,66 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🪐 Mi Universo + Boti Bot en http://localhost:${PORT}`);
+// ---------- HTTPS con certificado auto-firmado ----------
+// El micrófono (SpeechRecognition/getUserMedia) exige "secure context": en el
+// PC localhost cuenta como seguro, pero desde el celular (IP de la LAN) HTTP
+// no lo es y Chrome NI SIQUIERA ofrece el permiso de micrófono. Por eso el
+// puerto principal 8342 sirve HTTPS; el cert se genera solo la primera vez.
+const CERT_DIR = path.join(__dirname, 'certs');
+const CERT_FILE = path.join(CERT_DIR, 'cert.pem');
+const KEY_FILE = path.join(CERT_DIR, 'key.pem');
+
+/** IPs IPv4 de la LAN (para meterlas en el SAN del certificado y los logs). */
+function lanIPs() {
+  const ips = [];
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const i of ifaces ?? []) {
+      if (i.family === 'IPv4' && !i.internal) ips.push(i.address);
+    }
+  }
+  return ips;
+}
+
+/** Lee el certificado, o lo genera (auto-firmado, 10 años) si aún no existe. */
+async function ensureCert() {
+  if (fs.existsSync(CERT_FILE) && fs.existsSync(KEY_FILE)) {
+    return { cert: fs.readFileSync(CERT_FILE), key: fs.readFileSync(KEY_FILE) };
+  }
+  const ips = [...new Set(['192.168.40.137', ...lanIPs()])];
+  const pems = await selfsigned.generate(
+    [{ name: 'commonName', value: 'localhost' }],
+    {
+      days: 3650,
+      keySize: 2048,
+      extensions: [{
+        name: 'subjectAltName',
+        altNames: [
+          { type: 2, value: 'localhost' },          // type 2 = DNS
+          { type: 7, ip: '127.0.0.1' },             // type 7 = IP
+          ...ips.map((ip) => ({ type: 7, ip })),
+        ],
+      }],
+    }
+  );
+  fs.mkdirSync(CERT_DIR, { recursive: true });
+  fs.writeFileSync(CERT_FILE, pems.cert);
+  fs.writeFileSync(KEY_FILE, pems.private);
+  console.log('🔐 Certificado auto-firmado generado en server/certs/ (válido 10 años)');
+  return { cert: pems.cert, key: pems.private };
+}
+
+const tls = await ensureCert();
+const lan = lanIPs()[0] ?? '192.168.40.137';
+
+https.createServer(tls, app).listen(PORT, () => {
+  console.log('🪐 Mi Universo + Boti Bot');
+  console.log(`   PC:   https://localhost:${PORT}`);
+  console.log(`   Celu: https://${lan}:${PORT} (acepta el aviso de seguridad la primera vez)`);
   console.log(`   LLM (Claude): ${anthropic ? 'activo' : 'sin clave — modo banco local'}`);
   console.log(`   TTS (ElevenLabs): ${TTS_KEY ? 'activo' : 'sin clave — voz del navegador'}`);
+});
+
+// HTTP de cortesía SOLO en 127.0.0.1 (curl y pruebas locales sin warnings de cert)
+http.createServer(app).listen(HTTP_PORT, '127.0.0.1', () => {
+  console.log(`   Pruebas locales (HTTP): http://127.0.0.1:${HTTP_PORT}`);
 });

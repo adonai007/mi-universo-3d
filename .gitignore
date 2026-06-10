@@ -9,3 +9,6 @@ node_modules/
 deploy-live.png
 boti-*.png
 .env copy*
+
+server/certs/
+server-restart.log
