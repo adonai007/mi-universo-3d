@@ -7,3 +7,4 @@ bash.exe.stackdump
 .env
 node_modules/
 deploy-live.png
+boti-*.png
