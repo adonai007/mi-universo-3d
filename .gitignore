@@ -4,3 +4,6 @@ fix-*.png
 zoom-*.png
 sun-zoom.png
 bash.exe.stackdump
+.env
+node_modules/
+deploy-live.png

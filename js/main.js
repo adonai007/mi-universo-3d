@@ -5,6 +5,7 @@ import {
   QUIZ_QUESTIONS, QUIZ_LEVELS, STICKERS,
 } from './planets.js';
 import * as audio from './audio.js';
+import { initBoti } from './boti.js';
 import {
   loadSettings, saveSettings, initUI,
   showPlanetCard, hidePlanetCard, setCardSpeaking, showQuestionCard,
@@ -48,6 +49,9 @@ let quizState = null;     // { questions, idx, correct, level? }
 const customConfigs = loadCustomPlanets();
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ---------- Boti Bot 🤖 (perfiles + bienvenida + micrófono) ----------
+const boti = initBoti();
+
 // ---------- pegatinas ----------
 function award(id) {
   const st = STICKERS.find((s) => s.id === id);
@@ -55,6 +59,7 @@ function award(id) {
   if (unlockSticker(id)) {
     audio.fanfare();
     popSticker(st.emoji);
+    boti.celebrateSticker();
   }
 }
 
@@ -99,6 +104,8 @@ async function visitPlanet(def, { fromTour = false } = {}) {
     award(`visit-${def.id}`);
   }
   checkMission(def);
+  // De vez en cuando Boti comenta el planeta (tras la narración)
+  if (!fromTour && token === visitToken) boti.maybeCommentPlanet(def);
 }
 
 // ---------- misión del día 📅 ----------

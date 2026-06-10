@@ -31,19 +31,41 @@ Un sistema solar 3D interactivo para niños y niñas de **3 a 6 años**. No hace
 
 Todo se guarda en `localStorage`. Respeta `prefers-reduced-motion`, funciona con ratón y táctil, y avisa si no hay WebGL.
 
+### 🤖 Boti Bot, el amigo intergaláctico
+- **Pantalla de bienvenida**: cada niño elige su avatar (🦁🦄🐸🚀👧👦🐱🐶), su edad y escribe su nombre (con ayuda). Multi-perfil: cada niño guarda sus propias pegatinas y nivel; al volver, eliges quién juega.
+- **Botón 🎤 walkie-talkie**: mantén apretado, pregunta lo que quieras del universo y suelta. Boti responde por voz, corto, alegre y seguro. Sin micrófono (p. ej. Firefox) aparece un teclado ⌨️ para que ayuden los padres.
+- **Con claves** (`.env` en el servidor): respuestas inteligentes con Claude (Anthropic) y voz bonita con ElevenLabs.
+- **Sin claves o en la web estática**: Boti responde desde su banco local de ~30 preguntas del universo con la voz del navegador.
+- **Guardarraíles para niños**: Boti SOLO habla del espacio (filtro de temas en el servidor + system prompt estricto), respuestas de 1-3 frases, cero contenido aterrador, nunca pide datos personales, límite de 10 preguntas/minuto y respuestas cortas (control de costo).
+
 ## ▶️ Cómo ejecutarlo
 
-Es una web estática (sin build). Solo necesitas un servidor estático porque usa módulos ES:
+### Opción A — Completa, con Boti Bot inteligente (servidor Node)
 
 ```bash
-# opción 1
-npx serve .
-
-# opción 2
-python -m http.server 8341
+npm install
+copy .env.example .env   # (o cp en Mac/Linux) — pon tus claves, son opcionales
+npm start                # → http://localhost:8342
 ```
 
-Luego abre `http://localhost:8341`. Se necesita internet la primera vez para Three.js (CDN); las texturas de planetas ya están en `textures/` (funcionan offline).
+Claves en `.env` (ambas opcionales, la app funciona sin ellas):
+
+| Clave | Qué activa | Dónde conseguirla |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Respuestas inteligentes de Boti (Claude Haiku) | console.anthropic.com |
+| `ELEVENLABS_API_KEY` | Voz cálida de Boti | elevenlabs.io |
+
+Las claves viven SOLO en el servidor (`.env` está en `.gitignore`); nunca llegan al navegador.
+
+### Opción B — Solo estática (Boti en modo banco local)
+
+```bash
+npx serve .          # o python -m http.server 8341
+```
+
+Sin backend, Boti detecta que no hay `/api` y responde desde su banco local con la voz del navegador. Es el modo en que funciona la versión publicada en GitHub Pages.
+
+Se necesita internet la primera vez para Three.js (CDN); las texturas de planetas ya están en `textures/` (funcionan offline).
 
 ## 🛠️ Cómo personalizarlo
 
