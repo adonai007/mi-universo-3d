@@ -412,6 +412,12 @@ html, body {
   from { transform: translateY(0); }
   to { transform: translateY(-4px); }
 }
+/* Escuchando: la antena late en verde mientras el niño habla 🎤 */
+#boti.listening .boti-antenna-ball { animation: boti-listen 0.7s ease-in-out infinite alternate; }
+@keyframes boti-listen {
+  from { transform: scale(1); box-shadow: 0 0 4px 2px rgba(120, 255, 180, 0.5); }
+  to { transform: scale(1.5); box-shadow: 0 0 10px 6px rgba(120, 255, 180, 0.85); }
+}
 
 /* Burbuja de diálogo (apoyo visual; la voz es lo principal) */
 #boti-bubble {

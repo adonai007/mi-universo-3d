@@ -122,9 +122,27 @@ export function initBoti() {
   // navegador SIN romper el flujo, y tras 2 fallos dejamos de intentar el TTS
   // remoto durante toda la sesión (el backend también se auto-degrada).
   let ttsFailures = 0;
+  let speakGen = 0;   // generación de habla: al subir, las hablas anteriores se invalidan
+
+  /**
+   * Corta TODA la voz en curso de un plumazo: la de Boti (audio ElevenLabs y
+   * speechSynthesis), la narración del juego (audio.js usa speechSynthesis
+   * también) y la animación "hablando". Centralizada para no duplicar.
+   */
+  function stopAllSpeech() {
+    speakGen++;                 // invalida cualquier botiSpeak en curso
+    audio.stopSpeaking();       // speechSynthesis: voz de Boti y narración de planetas
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch { /* ya parado */ }
+      currentAudio = null;
+    }
+    setTalking(false);
+  }
 
   async function botiSpeak(text) {
     if (audio.isMuted()) return;
+    stopAllSpeech();            // si ya estaba hablando, la respuesta vieja se cancela (no se encola)
+    const gen = speakGen;
     setTalking(true);
     showBubble(text);
     try {
@@ -140,26 +158,32 @@ export function initBoti() {
           const isAudio = (r.headers.get('content-type') || '').includes('audio');
           if (r.ok && isAudio) {
             const blob = await r.blob();
+            if (gen !== speakGen) return;   // nos interrumpieron mientras llegaba el audio
             if (blob.size > 0) {
               await new Promise((resolve) => {
                 if (currentAudio) { currentAudio.pause(); }
                 currentAudio = new Audio(URL.createObjectURL(blob));
                 currentAudio.onended = resolve;
                 currentAudio.onerror = resolve;
+                currentAudio.onpause = resolve;   // interrumpido por stopAllSpeech()
                 currentAudio.play().catch(resolve);
               });
               played = true;
             }
           }
         } catch { /* error de red: cuenta como fallo */ }
-        if (played) return;
+        if (played || gen !== speakGen) return;
         ttsFailures++;
         if (ttsFailures >= 2) capabilities.tts = false;   // no insistir esta sesión
       }
+      if (gen !== speakGen) return;   // interrumpido: no arrancar la voz del navegador
       await audio.speak(text);   // fallback: voz del navegador
     } finally {
-      setTalking(false);
-      hideBubbleSoon();
+      // Solo la habla "vigente" puede apagar la animación (una nueva ya tomó el relevo)
+      if (gen === speakGen) {
+        setTalking(false);
+        hideBubbleSoon();
+      }
     }
   }
 
@@ -256,17 +280,30 @@ export function initBoti() {
     recognition.onend = () => { stopListening(); };
   }
 
+  let listenTimer = null;
+
   function startListening() {
     if (!recognition || listening) return;
     listening = true;
+    stopAllSpeech();            // Boti se calla AL INSTANTE: el niño manda 🎤
+    audio.blip(1.6);            // feedback inmediato: "te escucho"
     micBtn.classList.add('listening');
+    botiEl.classList.add('listening');
     showBubble('Te escucho… 👂');
-    try { recognition.start(); } catch { /* ya activo */ }
+    // Pequeña espera tras cortar la voz para que el micro no capture
+    // la cola del audio de Boti (eco) antes de empezar a reconocer.
+    clearTimeout(listenTimer);
+    listenTimer = setTimeout(() => {
+      if (!listening) return;
+      try { recognition.start(); } catch { /* ya activo */ }
+    }, 150);
   }
   function stopListening() {
     if (!listening) return;
     listening = false;
+    clearTimeout(listenTimer);
     micBtn.classList.remove('listening');
+    botiEl.classList.remove('listening');
     hideBubbleSoon();
     try { recognition?.stop(); } catch { /* ya parado */ }
   }
@@ -396,6 +433,7 @@ export function initBoti() {
       botiSpeak(comments[(Math.random() * comments.length) | 0]);
     },
     speak: botiSpeak,
+    stopAllSpeech,
     ask: askBoti,
     getProfile: activeProfile,
   };
