@@ -18,6 +18,12 @@ const TTS_VOICE = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
 
 const anthropic = LLM_KEY ? new Anthropic({ apiKey: LLM_KEY }) : null;
 
+// Auto-degradación de TTS: si ElevenLabs devuelve 401/403 (p. ej. la clave
+// existe pero le falta el permiso text_to_speech), se desactiva para toda la
+// sesión y /api/health pasa a reportar tts:false → el frontend deja de
+// intentarlo y usa la voz del navegador.
+let ttsDead = false;
+
 const app = express();
 app.use(express.json({ limit: '10kb' }));
 app.use(express.static(ROOT));
@@ -70,7 +76,7 @@ function rateLimited(ip) {
 
 // ---------- Rutas ----------
 app.get('/api/health', (_req, res) => {
-  res.json({ llm: !!anthropic, tts: !!TTS_KEY });
+  res.json({ llm: !!anthropic, tts: !!TTS_KEY && !ttsDead });
 });
 
 app.post('/api/ask', async (req, res) => {
@@ -111,10 +117,15 @@ app.post('/api/ask', async (req, res) => {
   }
 });
 
+// Los errores de TTS se devuelven como 200 + JSON {ok:false, reason} a
+// propósito: una respuesta HTTP de error genera "Failed to load resource" en
+// la consola del navegador en cada frase de Boti. El frontend distingue
+// audio real de error por el Content-Type.
 app.post('/api/tts', async (req, res) => {
-  if (!TTS_KEY) return res.status(404).json({ ok: false, reason: 'no-tts' });
+  if (!TTS_KEY) return res.json({ ok: false, reason: 'no-tts' });
+  if (ttsDead) return res.json({ ok: false, reason: 'tts-disabled' });
   const text = String(req.body?.text || '').slice(0, 500);
-  if (!text) return res.status(400).json({ ok: false });
+  if (!text) return res.json({ ok: false, reason: 'empty' });
 
   try {
     const r = await fetch(
@@ -130,14 +141,28 @@ app.post('/api/tts', async (req, res) => {
       }
     );
     if (!r.ok) {
-      console.error('[tts]', r.status, await r.text().catch(() => ''));
-      return res.status(502).json({ ok: false });
+      const detail = await r.text().catch(() => '');
+      console.error('[tts]', r.status, detail.slice(0, 300));
+      const isPermission = r.status === 401 || r.status === 403;
+      if (isPermission) {
+        ttsDead = true;
+        console.error(
+          '[tts] ⚠️ Clave de ElevenLabs rechazada (¿falta el permiso "text_to_speech"?). ' +
+          'Voz de ElevenLabs DESACTIVADA para esta sesión; Boti usará la voz del ' +
+          'navegador. /api/health ya reporta tts:false.'
+        );
+      }
+      return res.json({
+        ok: false,
+        reason: isPermission ? 'permission' : 'upstream',
+        status: r.status,
+      });
     }
     res.setHeader('Content-Type', 'audio/mpeg');
     res.send(Buffer.from(await r.arrayBuffer()));
   } catch (err) {
     console.error('[tts]', err.message);
-    res.status(502).json({ ok: false });
+    res.json({ ok: false, reason: 'network' });
   }
 });
 

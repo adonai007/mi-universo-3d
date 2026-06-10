@@ -118,30 +118,43 @@ export function initBoti() {
   window.addEventListener('beforeunload', snapshotProfile);
 
   // ---------- voz de Boti ----------
+  // Si ElevenLabs falla (clave sin permiso, red, etc.) caemos a la voz del
+  // navegador SIN romper el flujo, y tras 2 fallos dejamos de intentar el TTS
+  // remoto durante toda la sesión (el backend también se auto-degrada).
+  let ttsFailures = 0;
+
   async function botiSpeak(text) {
     if (audio.isMuted()) return;
     setTalking(true);
     showBubble(text);
     try {
       if (capabilities.tts) {
-        const r = await fetch('api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text }),
-        });
-        if (r.ok) {
-          const blob = await r.blob();
-          await new Promise((resolve) => {
-            if (currentAudio) { currentAudio.pause(); }
-            currentAudio = new Audio(URL.createObjectURL(blob));
-            currentAudio.onended = resolve;
-            currentAudio.onerror = resolve;
-            currentAudio.play().catch(resolve);
+        let played = false;
+        try {
+          const r = await fetch('api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text }),
           });
-          setTalking(false);
-          hideBubbleSoon();
-          return;
-        }
+          // El backend responde 200 siempre; solo es voz si llega audio real
+          const isAudio = (r.headers.get('content-type') || '').includes('audio');
+          if (r.ok && isAudio) {
+            const blob = await r.blob();
+            if (blob.size > 0) {
+              await new Promise((resolve) => {
+                if (currentAudio) { currentAudio.pause(); }
+                currentAudio = new Audio(URL.createObjectURL(blob));
+                currentAudio.onended = resolve;
+                currentAudio.onerror = resolve;
+                currentAudio.play().catch(resolve);
+              });
+              played = true;
+            }
+          }
+        } catch { /* error de red: cuenta como fallo */ }
+        if (played) return;
+        ttsFailures++;
+        if (ttsFailures >= 2) capabilities.tts = false;   // no insistir esta sesión
       }
       await audio.speak(text);   // fallback: voz del navegador
     } finally {
