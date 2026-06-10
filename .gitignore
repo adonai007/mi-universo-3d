@@ -8,3 +8,4 @@ bash.exe.stackdump
 node_modules/
 deploy-live.png
 boti-*.png
+.env copy*
