@@ -144,15 +144,16 @@ export function initBoti() {
     stopAllSpeech();            // si ya estaba hablando, la respuesta vieja se cancela (no se encola)
     const gen = speakGen;
     setTalking(true);
-    showBubble(text);
+    showBubble(text);                              // la burbuja muestra el ORIGINAL (con emojis)
+    const speechText = audio.cleanForSpeech(text); // la voz solo recibe texto limpio
     try {
-      if (capabilities.tts) {
+      if (capabilities.tts && speechText) {
         let played = false;
         try {
           const r = await fetch('api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text: speechText }),
           });
           // El backend responde 200 siempre; solo es voz si llega audio real
           const isAudio = (r.headers.get('content-type') || '').includes('audio');

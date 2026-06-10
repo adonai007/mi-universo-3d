@@ -53,7 +53,8 @@ REGLAS ESTRICTAS (no negociables):
 - NUNCA pidas ni repitas datos personales (dirección, escuela, teléfono).
 - NUNCA des instrucciones de hacer cosas peligrosas, ni menciones enlaces, marcas, apps o videos.
 - Si no sabes la respuesta: "¡Esa es una pregunta súper difícil! ¡Preguntemos a un astrónomo!".
-- Puedes usar 1 o 2 emojis del espacio (🚀🌙⭐🪐) por respuesta.`;
+- Puedes usar 1 o 2 emojis del espacio (🚀🌙⭐🪐) por respuesta.
+- Responde SOLO en texto plano: NUNCA uses markdown ni asteriscos (*texto*) ni guiones bajos (_texto_) para dar énfasis. Tu respuesta se lee en voz alta tal cual.`;
 }
 
 const CANNED = {

@@ -174,6 +174,29 @@ export function playMelody(defId) {
 }
 
 // ---------- Voz en español ----------
+
+/**
+ * Limpia el texto ANTES de dárselo a la voz (speechSynthesis o ElevenLabs):
+ * quita emojis/pictogramas (que la voz lee en alto: "cohete", "estrella"…)
+ * y el markdown del LLM (*énfasis*, **negrita**, _subrayado_).
+ * La burbuja visual muestra el texto ORIGINAL (los emojis ayudan a los
+ * pre-lectores); solo la voz recibe el texto limpio.
+ */
+export function cleanForSpeech(text) {
+  return String(text ?? '')
+    // Emojis y pictogramas: Extended_Pictographic + selectores de variación,
+    // ZWJ (emojis compuestos), tonos de piel, banderas regionales y keycaps
+    .replace(/[\p{Extended_Pictographic}\u{FE0E}\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}\u{1F1E6}-\u{1F1FF}\u{20E3}]/gu, '')
+    // Markdown del LLM: *énfasis*, **negrita**, _subrayado_
+    .replace(/[*_]+/g, '')
+    // Puntuación huérfana: pares vacíos ("¡ !" / "¿ ?") y espacio antes de signo
+    .replace(/¡\s*!|¿\s*\?/g, '')
+    .replace(/\s+([!?.,;:])/g, '$1')
+    // Colapsar los espacios que quedaron al quitar emojis
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function findSpanishVoice() {
   if (!('speechSynthesis' in window)) return null;
   const voices = speechSynthesis.getVoices();
@@ -196,10 +219,13 @@ if ('speechSynthesis' in window) {
 export function speak(text) {
   return new Promise((resolve) => {
     if (muted || !('speechSynthesis' in window)) return resolve(false);
+    // La voz NO lee emojis ni asteriscos (la burbuja muestra el original)
+    const clean = cleanForSpeech(text);
+    if (!clean) return resolve(false);
     if (spanishVoice === undefined) spanishVoice = findSpanishVoice();
     try {
       speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
+      const u = new SpeechSynthesisUtterance(clean);
       u.lang = 'es-ES';
       if (spanishVoice) u.voice = spanishVoice;
       u.pitch = 1.25;   // voz un poco más aguda, amistosa
@@ -210,7 +236,7 @@ export function speak(text) {
       u.onend = () => finish(true);
       u.onerror = () => finish(false);
       // Red de seguridad por si onend nunca llega
-      setTimeout(() => finish(true), 1000 + text.length * 120);
+      setTimeout(() => finish(true), 1000 + clean.length * 120);
       speechSynthesis.speak(u);
     } catch {
       resolve(false);
