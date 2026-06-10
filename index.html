@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="description" content="Mi Universo — un sistema solar 3D interactivo para niños de 3 a 6 años" />
+  <title>🪐 Mi Universo</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🪐</text></svg>" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Lienzo 3D -->
+  <canvas id="space" aria-label="Sistema solar en 3D"></canvas>
+
+  <!-- Mensaje si no hay WebGL -->
+  <div id="no-webgl" class="hidden" role="alert">
+    <span class="big-emoji">🔭😢</span>
+    <p>Este aparato no puede mostrar el espacio en 3D.</p>
+  </div>
+
+  <!-- Tarjeta del planeta (apoyo visual para pre-lectores) -->
+  <div id="planet-card" class="hidden" aria-live="polite">
+    <span id="card-emoji" class="card-emoji">🌍</span>
+    <div class="card-text">
+      <span id="card-name" class="card-name">Tierra</span>
+      <div class="card-extras">
+        <span id="card-temp" class="card-temp"></span>
+        <span id="card-moons" class="card-moons"></span>
+      </div>
+    </div>
+    <div id="card-mouth" class="card-mouth"></div>
+  </div>
+
+  <!-- Botones grandes solo con iconos -->
+  <nav id="toolbar" aria-label="Controles">
+    <button id="btn-home"   class="big-btn" aria-label="Ver todo el universo">🏠</button>
+    <button id="btn-galaxy" class="big-btn" aria-label="Ver la galaxia, más allá del sistema solar">🌌</button>
+    <button id="btn-tour"   class="big-btn" aria-label="Paseo espacial guiado">🚀</button>
+    <button id="btn-compare" class="big-btn" aria-label="Comparar tamaños de los planetas">📏</button>
+    <button id="btn-games"  class="big-btn" aria-label="Juegos">🎮</button>
+    <button id="btn-pause"  class="big-btn" aria-label="Pausar o mover los planetas">⏸️</button>
+    <button id="btn-sound"  class="big-btn" aria-label="Sonido encendido o apagado">🔊</button>
+    <button id="btn-style"  class="big-btn" aria-label="Cambiar colores y estrellas">🎨</button>
+  </nav>
+
+  <!-- Cajón de juegos (se abre con 🎮) -->
+  <nav id="games-row" class="hidden" aria-label="Juegos">
+    <button id="btn-quiz"  class="big-btn" aria-label="Juego de adivinar planetas">🎯</button>
+    <button id="btn-levels" class="big-btn" aria-label="Quiz con niveles">🏆</button>
+    <button id="btn-album" class="big-btn" aria-label="Álbum de pegatinas">📒</button>
+    <button id="btn-build" class="big-btn" aria-label="Construye tu planeta">🪐</button>
+  </nav>
+
+  <!-- Panel de personalización (solo iconos) -->
+  <div id="style-panel" class="hidden side-panel" aria-label="Personalizar">
+    <div class="panel-row" aria-label="Velocidad de los planetas">
+      <span class="row-icon">🐢</span>
+      <input id="speed-slider" type="range" min="0" max="3" step="0.05" value="1" aria-label="Velocidad de las órbitas" />
+      <span class="row-icon">🐇</span>
+    </div>
+    <div class="panel-row" aria-label="Cantidad de estrellas">
+      <span class="row-icon">✨</span>
+      <button class="mini-btn star-opt" data-stars="low"    aria-label="Pocas estrellas">·</button>
+      <button class="mini-btn star-opt" data-stars="normal" aria-label="Estrellas normales">✳️</button>
+      <button class="mini-btn star-opt" data-stars="high"   aria-label="Muchas estrellas">🌌</button>
+    </div>
+    <div class="panel-row" aria-label="Color del cielo">
+      <button class="swatch" data-sky="#03020f" style="background:#03020f" aria-label="Cielo negro"></button>
+      <button class="swatch" data-sky="#0b1035" style="background:#0b1035" aria-label="Cielo azul noche"></button>
+      <button class="swatch" data-sky="#1a0b2e" style="background:#1a0b2e" aria-label="Cielo morado"></button>
+      <button class="swatch" data-sky="#06201c" style="background:#06201c" aria-label="Cielo verde oscuro"></button>
+    </div>
+    <div class="panel-row" aria-label="Luz ambiental">
+      <button class="mini-btn amb-opt" data-amb="night" aria-label="Noche">🌙</button>
+      <button class="mini-btn amb-opt" data-amb="warm"  aria-label="Atardecer">🌅</button>
+      <button class="mini-btn amb-opt" data-amb="day"   aria-label="Día">☀️</button>
+    </div>
+    <div class="panel-row" aria-label="Mostrar u ocultar cosas">
+      <button id="toggle-orbits" class="mini-btn" aria-label="Mostrar líneas de órbita">⭕</button>
+      <button id="toggle-labels" class="mini-btn" aria-label="Mostrar nombres de los planetas">🔤</button>
+    </div>
+  </div>
+
+  <!-- Panel "construye tu planeta" 🪐 (solo iconos) -->
+  <div id="build-panel" class="hidden side-panel" aria-label="Construye tu planeta">
+    <div class="panel-row" aria-label="Color de tu planeta">
+      <button class="swatch build-color" data-color="#e84d6f" style="background:#e84d6f" aria-label="Rosa"></button>
+      <button class="swatch build-color" data-color="#43c465" style="background:#43c465" aria-label="Verde"></button>
+      <button class="swatch build-color" data-color="#4f8cff" style="background:#4f8cff" aria-label="Azul"></button>
+      <button class="swatch build-color" data-color="#c77dff" style="background:#c77dff" aria-label="Morado"></button>
+      <button class="swatch build-color" data-color="#ffb15e" style="background:#ffb15e" aria-label="Naranja"></button>
+    </div>
+    <div class="panel-row" aria-label="Tamaño de tu planeta">
+      <span class="row-icon">🐜</span>
+      <input id="build-size" type="range" min="0.8" max="4" step="0.1" value="1.8" aria-label="Tamaño" />
+      <span class="row-icon">🐘</span>
+    </div>
+    <div class="panel-row" aria-label="Anillos y lunas">
+      <button id="build-rings" class="mini-btn" aria-label="Anillos sí o no">💍</button>
+      <button id="build-moons" class="mini-btn" aria-label="Cuántas lunas">🌙<sub id="build-moons-n">0</sub></button>
+    </div>
+    <div class="panel-row" aria-label="Crear o quitar">
+      <button id="build-go" class="mini-btn build-go" aria-label="¡Crear mi planeta!">✨</button>
+      <button id="build-del" class="mini-btn" aria-label="Quitar mi último planeta">🗑️</button>
+    </div>
+  </div>
+
+  <!-- Álbum de pegatinas 📒 -->
+  <div id="album" class="hidden" aria-label="Álbum de pegatinas">
+    <div id="album-grid"></div>
+    <button id="album-close" class="big-btn album-close" aria-label="Cerrar álbum">❌</button>
+  </div>
+
+  <!-- Pegatina nueva (animación de desbloqueo) -->
+  <div id="sticker-pop" class="hidden" aria-live="polite">
+    <span id="sticker-pop-emoji">⭐</span>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
