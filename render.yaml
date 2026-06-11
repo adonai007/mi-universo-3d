@@ -1,0 +1,19 @@
+# Blueprint de Render.com para "Mi Universo 3D" + Boti Bot 🤖
+# Render setea RENDER=true y PORT automáticamente; el server detecta eso y
+# levanta HTTP plano en 0.0.0.0:$PORT (Render termina TLS en su proxy).
+services:
+  - type: web
+    name: mi-universo-3d
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      # Claves secretas: se setean a mano en el dashboard de Render (sync: false).
+      # Sin ANTHROPIC_API_KEY Boti responde desde su banco local de FAQs.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Sin ELEVENLABS_API_KEY Boti usa la voz del navegador (speechSynthesis).
+      - key: ELEVENLABS_API_KEY
+        sync: false

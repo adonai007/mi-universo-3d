@@ -221,18 +221,36 @@ async function ensureCert() {
   return { cert: pems.cert, key: pems.private };
 }
 
-const tls = await ensureCert();
-const lan = lanIPs()[0] ?? '192.168.40.137';
+// ---------- Arranque ----------
+// En Render (process.env.RENDER === 'true') el proxy de Render ya termina TLS:
+// servimos HTTP plano en 0.0.0.0:$PORT y NO generamos certificados.
+// En local se mantiene el HTTPS auto-firmado (el micrófono exige secure context
+// desde el celular por la LAN) + el HTTP de cortesía en 127.0.0.1.
+const IS_RENDER = process.env.RENDER === 'true';
 
-https.createServer(tls, app).listen(PORT, () => {
-  console.log('🪐 Mi Universo + Boti Bot');
-  console.log(`   PC:   https://localhost:${PORT}`);
-  console.log(`   Celu: https://${lan}:${PORT} (acepta el aviso de seguridad la primera vez)`);
-  console.log(`   LLM (Claude): ${anthropic ? 'activo' : 'sin clave — modo banco local'}`);
-  console.log(`   TTS (ElevenLabs): ${TTS_KEY ? 'activo' : 'sin clave — voz del navegador'}`);
-});
+if (IS_RENDER) {
+  // Detrás del proxy de Render, req.ip debe salir de X-Forwarded-For para que
+  // el rate limit por IP no trate a todos los visitantes como una sola IP.
+  app.set('trust proxy', 1);
+  http.createServer(app).listen(PORT, '0.0.0.0', () => {
+    console.log(`🪐 Mi Universo + Boti Bot — Render (HTTP plano) en 0.0.0.0:${PORT}`);
+    console.log(`   LLM (Claude): ${anthropic ? 'activo' : 'sin clave — modo banco local'}`);
+    console.log(`   TTS (ElevenLabs): ${TTS_KEY ? 'activo' : 'sin clave — voz del navegador'}`);
+  });
+} else {
+  const tls = await ensureCert();
+  const lan = lanIPs()[0] ?? '192.168.40.137';
 
-// HTTP de cortesía SOLO en 127.0.0.1 (curl y pruebas locales sin warnings de cert)
-http.createServer(app).listen(HTTP_PORT, '127.0.0.1', () => {
-  console.log(`   Pruebas locales (HTTP): http://127.0.0.1:${HTTP_PORT}`);
-});
+  https.createServer(tls, app).listen(PORT, () => {
+    console.log('🪐 Mi Universo + Boti Bot');
+    console.log(`   PC:   https://localhost:${PORT}`);
+    console.log(`   Celu: https://${lan}:${PORT} (acepta el aviso de seguridad la primera vez)`);
+    console.log(`   LLM (Claude): ${anthropic ? 'activo' : 'sin clave — modo banco local'}`);
+    console.log(`   TTS (ElevenLabs): ${TTS_KEY ? 'activo' : 'sin clave — voz del navegador'}`);
+  });
+
+  // HTTP de cortesía SOLO en 127.0.0.1 (curl y pruebas locales sin warnings de cert)
+  http.createServer(app).listen(HTTP_PORT, '127.0.0.1', () => {
+    console.log(`   Pruebas locales (HTTP): http://127.0.0.1:${HTTP_PORT}`);
+  });
+}
