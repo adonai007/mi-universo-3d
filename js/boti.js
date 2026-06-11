@@ -224,7 +224,7 @@ export function initBoti() {
         <div class="boti-mouth"></div>
       </div>
     </div>
-    <button id="btn-mic" class="big-btn" aria-label="Mantén apretado para hablar con Boti">🎤</button>
+    <button id="btn-mic" class="big-btn" data-tip="Habla con Boti" aria-label="Mantén apretado para hablar con Boti">🎤</button>
   `;
   document.body.appendChild(hud);
 
@@ -235,7 +235,7 @@ export function initBoti() {
   typePanel.innerHTML = `
     <input id="boti-type-input" type="text" maxlength="120"
       placeholder="Escribe tu pregunta del espacio…" aria-label="Pregunta para Boti" />
-    <button id="boti-type-go" class="big-btn" aria-label="Preguntar">🆗</button>
+    <button id="boti-type-go" class="big-btn" data-tip="Preguntar" aria-label="Preguntar">🆗</button>
   `;
   document.body.appendChild(typePanel);
 
@@ -316,6 +316,8 @@ export function initBoti() {
   } else {
     // Sin SpeechRecognition (p. ej. Firefox): teclado simple
     micBtn.textContent = '⌨️';
+    micBtn.dataset.tip = 'Escríbele a Boti';
+    micBtn.setAttribute('aria-label', 'Escríbele tu pregunta a Boti');
     micBtn.addEventListener('click', () => {
       typePanel.classList.toggle('hidden');
       $('boti-type-input').focus();

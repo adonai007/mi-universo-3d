@@ -577,3 +577,39 @@ html, body {
   .card-emoji, #planet-card, #style-panel { animation: none !important; }
   #boti, .welcome-boti, .boti-antenna-ball { animation: none !important; }
 }
+
+/* ---- Tooltips (título visible al pasar el mouse o navegar con teclado) ----
+   Burbuja arriba del control con data-tip. En pantallas táctiles no pasa
+   nada: el bloque :hover vive dentro de @media (hover: hover). */
+[data-tip] { position: relative; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.92);
+  padding: 7px 14px;
+  border-radius: 14px;
+  background: rgba(10, 10, 35, 0.88);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: bold;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 60;
+  transition: opacity 0.15s ease 0.05s, transform 0.15s ease 0.05s;
+}
+@media (hover: hover) {
+  [data-tip]:hover::after {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+}
+[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}

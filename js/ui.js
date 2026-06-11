@@ -99,18 +99,25 @@ export function initUI(settings, handlers) {
   });
 
   const btnSound = $('btn-sound');
+  const paintSound = () => {
+    btnSound.textContent = settings.sound ? '🔊' : '🔇';
+    btnSound.dataset.tip = settings.sound ? 'Sonido' : 'Sonido apagado';
+  };
   btnSound.addEventListener('click', () => {
     settings.sound = !settings.sound;
-    btnSound.textContent = settings.sound ? '🔊' : '🔇';
+    paintSound();
     saveSettings(settings);
     handlers.onSoundToggle(settings.sound);
   });
-  btnSound.textContent = settings.sound ? '🔊' : '🔇';
+  paintSound();
 
   const btnPause = $('btn-pause');
-  btnPause.addEventListener('click', () => {
-    const paused = handlers.onPauseToggle();
+  const paintPause = (paused) => {
     btnPause.textContent = paused ? '▶️' : '⏸️';
+    btnPause.dataset.tip = paused ? 'Reanudar' : 'Pausar órbitas';
+  };
+  btnPause.addEventListener('click', () => {
+    paintPause(handlers.onPauseToggle());
   });
 
   $('btn-style').addEventListener('click', (e) => togglePanel('style', e.currentTarget));
@@ -217,7 +224,7 @@ export function initUI(settings, handlers) {
     setCompareActive(active) { $('btn-compare').classList.toggle('active', active); },
     setQuizActive(active) { $('btn-quiz').classList.toggle('active', active); },
     setLevelsActive(active) { $('btn-levels').classList.toggle('active', active); },
-    setPaused(paused) { $('btn-pause').textContent = paused ? '▶️' : '⏸️'; },
+    setPaused(paused) { paintPause(paused); },
     hidePanels: closeAllPanels,
     showAlbum,
   };

@@ -12,3 +12,4 @@ boti-*.png
 
 server/certs/
 server-restart.log
+set-render-env.ps1
