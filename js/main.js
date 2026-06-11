@@ -92,6 +92,10 @@ async function visitPlanet(def, { fromTour = false } = {}) {
   system.celebrate(def);
   audio.twinkle();
 
+  // Al visitar el agujero negro, una estrellita cae y se espaguetiza 🍝:
+  // así el niño VE lo que la narración va contando.
+  if (def.id === 'agujero') system.feedBlackHole();
+
   await new Promise((resolve) => system.flyTo(def, resolve));
   if (token !== visitToken) return;
 

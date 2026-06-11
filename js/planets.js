@@ -1,12 +1,16 @@
 // ====== Datos didácticos del sistema solar (en español sencillo) ======
 // Tamaños relativos comprimidos pero con el ORDEN correcto (Júpiter > Saturno > ...).
-// Inclinación axial real (axialTilt, en grados) y rotaciones ordinales plausibles:
-// Júpiter el más rápido, Venus lentísimo y al revés (retrógrado).
+// Inclinación axial REAL (axialTilt, valores IAU) y rotación propia con la
+// PROPORCIÓN REAL entre planetas (spinSpeed ∝ 1/período de rotación, con la
+// Tierra normalizada a 0.7 — exageración uniforme para que se note):
+// Júpiter da la vuelta en ~10 h (el más rápido), Venus tarda 243 días.
 //
 // Campos por planeta:
 //   size         radio visual (escala comprimida, ordinal correcta)
-//   axialTilt    inclinación del eje en grados (Urano ~98: ¡acostado!)
-//   spinSpeed    rotación propia (negativa = retrógrada)
+//   axialTilt    inclinación del eje en grados (Urano 97.8: ¡acostado!)
+//   spinSpeed    rotación propia. OJO Venus: su eje está volteado (177.4°),
+//                así que girar "normal" sobre su eje se VE al revés desde
+//                arriba — así es el retrógrado real, sin trucos de signo.
 //   moons        número de lunas (se muestran como 🌙 en la tarjeta)
 //   temp         'hot' | 'veryhot' | 'nice' | 'cold' | 'verycold'
 //   facts        4-5 datos categorizados (tamaño, temperatura, lunas, sorpresa)
@@ -27,6 +31,7 @@ export const SUN = {
     'Soy tan grande que dentro de mí caben un millón de Tierras.',
     'Doy luz y calor a todos los planetas.',
     'Tengo manchas oscuras que se llaman manchas solares.',
+    '¿Ves mis llamaradas? ¡Son tormentas de fuego más grandes que la Tierra entera! Tranquilo: estás lejos y a salvo.',
   ],
   sizeFact: '¡Yo soy el más grande de todos! Soy una estrella, no un planeta.',
   tourIntro: 'Empezamos nuestro viaje en el centro: ¡el Sol!',
@@ -42,8 +47,8 @@ export const PLANETS = [
     size: 0.75,
     orbitRadius: 15,
     orbitSpeed: 0.50,
-    spinSpeed: 0.06,        // gira muy despacio
-    axialTilt: 0,
+    spinSpeed: 0.012,       // su día dura ~59 días terrestres: gira lentísimo
+    axialTilt: 0.03,        // eje casi perfectamente derecho
     textureType: 'rocky',
     pitch: 1.8,
     temp: 'hot',
@@ -67,8 +72,8 @@ export const PLANETS = [
     size: 1.55,
     orbitRadius: 21,
     orbitSpeed: 0.38,
-    spinSpeed: -0.03,       // retrógrado: ¡gira al revés y lentísimo!
-    axialTilt: 177,
+    spinSpeed: 0.003,       // 243 días por vuelta: el más lento de todos
+    axialTilt: 177.4,       // eje volteado: por eso se VE girar al revés (retrógrado)
     textureType: 'cloudy',
     atmosphere: { color: 0xf5d8a0, opacity: 0.16, scale: 1.12 },
     pitch: 1.6,
@@ -94,7 +99,7 @@ export const PLANETS = [
     orbitRadius: 27,
     orbitSpeed: 0.30,
     spinSpeed: 0.7,
-    axialTilt: 23.5,
+    axialTilt: 23.4,        // la inclinación que nos regala las estaciones
     textureType: 'earth',
     hasClouds: true,
     atmosphere: { color: 0x5599ff, opacity: 0.22, scale: 1.15 },
@@ -108,6 +113,8 @@ export const PLANETS = [
       'No soy ni muy caliente ni muy fría: ¡perfecta para vivir!',
       'Tengo una luna que baila a mi alrededor.',
       'Soy el único planeta con animales, plantas y niños.',
+      'Giro un poquito inclinadita, como de ladito. ¡Por eso hay verano calentito y también invierno con frío!',
+      'Mira mi lado oscuro: ¿ves lucecitas brillantes? ¡Son las ciudades, donde la gente enciende las luces de noche!',
     ],
     dayNightFact:
       'Mira bien: el lado que mira al Sol está iluminado, ¡ahí es de día! ' +
@@ -125,8 +132,8 @@ export const PLANETS = [
     size: 0.9,
     orbitRadius: 33,
     orbitSpeed: 0.24,
-    spinSpeed: 0.68,
-    axialTilt: 25,
+    spinSpeed: 0.68,        // su día dura casi igual que el nuestro (24.6 h)
+    axialTilt: 25.2,
     textureType: 'mars',
     atmosphere: { color: 0xff9966, opacity: 0.10, scale: 1.10 },
     pitch: 1.4,
@@ -151,10 +158,11 @@ export const PLANETS = [
     size: 5.2,
     orbitRadius: 47,
     orbitSpeed: 0.14,
-    spinSpeed: 1.6,         // ¡el que más rápido gira!
-    axialTilt: 3,
+    spinSpeed: 1.69,        // ¡el que más rápido gira! (1 día = ~10 horas)
+    axialTilt: 3.1,
     textureType: 'banded',
     hasSpot: true,
+    atmosphere: { color: 0xe8c39a, opacity: 0.12, scale: 1.08 },
     pitch: 0.7,
     temp: 'cold',
     moons: 95,
@@ -163,7 +171,7 @@ export const PLANETS = [
       'Dentro de mí caben más de mil Tierras.',
       'Mi mancha roja es una tormenta más grande que la Tierra.',
       'Tengo muchísimas lunas, ¡casi cien!',
-      'Giro tan rápido que mi día dura muy poquito.',
+      '¡Giro rapidísimo! Doy la vuelta entera en solo diez horas. ¡Mi día es cortito, cortito!',
     ],
     sizeFact: '¡Soy gigante! Dentro de mí caben más de mil Tierras.',
     tourIntro: 'Ahora volamos muy lejos. ¡Mira qué grandote viene!',
@@ -177,10 +185,11 @@ export const PLANETS = [
     size: 4.5,
     orbitRadius: 60,
     orbitSpeed: 0.10,
-    spinSpeed: 1.4,
-    axialTilt: 27,
+    spinSpeed: 1.57,        // casi tan rápido como Júpiter (1 día = ~10.7 h)
+    axialTilt: 26.7,
     textureType: 'banded',
     hasRings: true,
+    atmosphere: { color: 0xf0ddb0, opacity: 0.10, scale: 1.07 },
     pitch: 0.8,
     temp: 'cold',
     moons: 146,
@@ -203,9 +212,10 @@ export const PLANETS = [
     size: 3.0,
     orbitRadius: 72,
     orbitSpeed: 0.07,
-    spinSpeed: 0.9,
-    axialTilt: 98,          // ¡casi acostado!
+    spinSpeed: 0.97,
+    axialTilt: 97.8,        // ¡acostado! rueda de lado como una pelota
     textureType: 'cloudy',
+    atmosphere: { color: 0xa8eef8, opacity: 0.14, scale: 1.10 },
     pitch: 1.2,
     temp: 'verycold',
     moons: 28,
@@ -228,9 +238,10 @@ export const PLANETS = [
     size: 2.9,
     orbitRadius: 82,
     orbitSpeed: 0.05,
-    spinSpeed: 0.95,
-    axialTilt: 28,
+    spinSpeed: 1.04,
+    axialTilt: 28.3,
     textureType: 'cloudy',
+    atmosphere: { color: 0x5f7fff, opacity: 0.14, scale: 1.10 },
     pitch: 0.9,
     temp: 'verycold',
     moons: 16,
@@ -309,10 +320,15 @@ export const EXTRAS = {
     temp: null,
     moons: 0,
     size: 18,
+    // Física real contada para niños de 3-6: cada frase acompaña algo que
+    // se VE en la simulación (disco, beaming, lensing, espaguetización).
     facts: [
-      'Soy un agujero negro. ¡Me trago hasta la luz!',
-      'Vivo muy, muy lejos. Desde aquí no te puedo alcanzar.',
-      'A mi alrededor gira un remolino brillante.',
+      'Soy un agujero negro: como una aspiradora gigante del espacio. ¡Nada puede escapar de mí, ni la luz!',
+      'Ese anillo brillante es gas calentito que da vueltas rapidísimo antes de caer. Los que están más cerca giran más rápido.',
+      '¿Ves que un lado brilla más? ¡Es porque ese lado viene hacia ti volando rapidísimo!',
+      'La luz se dobla a mi alrededor. ¡Por eso parezco un ojo brillante en el espacio!',
+      '¡Mira esa estrella! Se estira como un fideo... Los científicos lo llaman espaguetización. 🍝',
+      'Tranquilo: vivo lejísimos y desde aquí no te puedo alcanzar.',
     ],
   },
   starRed: {

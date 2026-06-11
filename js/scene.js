@@ -7,10 +7,11 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SUN, PLANETS, MOON, EXTRAS } from './planets.js';
 import {
-  createPlanetTexture, createSunTexture, createSunOverlayTexture,
+  createPlanetTexture, createSunTexture,
   createGlowTexture, createDotTexture, createRingTexture, createLabelTexture,
   createMoonTexture, createEarthCloudsTexture, createMilkyWayTexture,
 } from './textures.js';
+import { createBlackHole } from './blackhole.js';
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -43,6 +44,73 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+// ---------- Shaders inline (baratos: pensados para un Android medio) ----------
+// Granulación del Sol: 3 octavas de value-noise animado sobre la esfera.
+// Va en una capa semitransparente ENCIMA de la textura real: el Sol "hierve".
+const SUN_BOIL_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const SUN_BOIL_FRAG = /* glsl */ `
+  uniform float uTime;
+  varying vec2 vUv;
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  void main() {
+    vec2 p = vUv * vec2(22.0, 11.0);
+    float t = uTime * 0.35;
+    float v = 0.5   * vnoise(p       + vec2(t, -t * 0.7));
+    v      += 0.25  * vnoise(p * 2.1 - vec2(t * 1.6, t));
+    v      += 0.125 * vnoise(p * 4.3 + vec2(-t, t * 1.3));
+    v /= 0.875;
+    // Células brillantes (gránulos) y calles oscuras entre ellas
+    vec3 col = mix(vec3(0.85, 0.32, 0.02), vec3(1.0, 0.93, 0.55), smoothstep(0.25, 0.8, v));
+    float alpha = 0.28 + 0.34 * smoothstep(0.2, 0.9, v);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+// Atmósfera con borde fresnel: brilla en la silueta del planeta y se apaga
+// hacia afuera; el lado que mira al Sol (origen) brilla más que el lado noche.
+const ATMO_VERT = /* glsl */ `
+  varying vec3 vN;
+  varying vec3 vE;
+  varying vec3 vW;
+  varying vec3 vC;
+  void main() {
+    vN = normalize(normalMatrix * normal);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vE = -mv.xyz;
+    vW = (modelMatrix * vec4(position, 1.0)).xyz;
+    vC = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const ATMO_FRAG = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  uniform float uEdge;   // cos del ángulo donde está el borde del planeta
+  varying vec3 vN;
+  varying vec3 vE;
+  varying vec3 vW;
+  varying vec3 vC;
+  void main() {
+    float d = abs(dot(normalize(vN), normalize(vE)));
+    float rim = pow(clamp(d / uEdge, 0.0, 1.0), 2.0);   // 1 en el borde, 0 afuera
+    float day = 0.3 + 0.7 * smoothstep(-0.55, 0.5, dot(normalize(vW - vC), normalize(-vC)));
+    gl_FragColor = vec4(uColor, rim * day * uOpacity);
+  }
+`;
+
 export class SolarSystem {
   constructor(canvas) {
     this.canvas = canvas;
@@ -61,6 +129,7 @@ export class SolarSystem {
     this.customPlanets = [];
     this.missionDefId = null;
     this.shootingStar = null;
+    this.earthNightUniforms = null;   // luces de ciudad 🌃 (si carga el nightmap)
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -207,14 +276,39 @@ export class SolarSystem {
     this.pickables.push(this.sun);
     this.focusTargets.set('sol', this.sun);
 
-    // Capa de granulación que contra-rota: el Sol "hierve"
+    // Capa de granulación VIVA: ruido animado en shader sobre la textura real,
+    // y además contra-rota — el Sol "hierve" de verdad, nunca se ve congelado.
+    this.sunUniforms = { uTime: { value: 0 } };
     this.sunOverlay = new THREE.Mesh(
       new THREE.SphereGeometry(SUN.size * 1.012, 48, 32),
-      new THREE.MeshBasicMaterial({
-        map: createSunOverlayTexture(), transparent: true, opacity: 0.65, depthWrite: false,
+      new THREE.ShaderMaterial({
+        uniforms: this.sunUniforms,
+        vertexShader: SUN_BOIL_VERT,
+        fragmentShader: SUN_BOIL_FRAG,
+        transparent: true,
+        depthWrite: false,
       })
     );
     this.solarGroup.add(this.sunOverlay);
+
+    // Prominencias/llamaradas ☀️🔥: arcos de plasma que brotan del borde,
+    // crecen, tiemblan y se apagan; luego reaparecen en otro lugar.
+    this.prominences = [];
+    for (let i = 0; i < 3; i++) {
+      const arc = new THREE.Mesh(
+        new THREE.TorusGeometry(SUN.size * 0.34, SUN.size * 0.045, 5, 20, Math.PI),
+        new THREE.MeshBasicMaterial({
+          color: 0xff7a33, transparent: true, opacity: 0,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        })
+      );
+      const g = new THREE.Group();
+      g.add(arc);
+      this.solarGroup.add(g);
+      const p = { group: g, arc, t: -i * 2.5 - Math.random() * 3 };
+      this.#repositionProminence(p);
+      this.prominences.push(p);
+    }
 
     // Resplandor (corona) con sprites aditivos
     const glowMat = new THREE.SpriteMaterial({
@@ -231,6 +325,17 @@ export class SolarSystem {
     glow2.scale.setScalar(SUN.size * 8);
     this.solarGroup.add(glow2);
     this.sunGlow2 = glow2;
+  }
+
+  /** Mueve una prominencia a un punto al azar del borde del Sol. */
+  #repositionProminence(p) {
+    const dir = new THREE.Vector3().randomDirection();
+    p.group.position.copy(dir).multiplyScalar(SUN.size * 0.99);
+    // El medio-toro arquea hacia su +Y local: lo apuntamos hacia afuera
+    p.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    p.group.rotateY(Math.random() * Math.PI * 2);
+    p.arc.scale.set(1, 0.001, 1);
+    p.arc.material.opacity = 0;
   }
 
   /** Crea el conjunto de un planeta (también usado por "construye tu planeta"). */
@@ -253,6 +358,37 @@ export class SolarSystem {
     if (REAL_TEXTURES[def.id]) {
       this.#loadReal(REAL_TEXTURES[def.id], (t) => { mat.map = t; mat.needsUpdate = true; });
     }
+
+    // Lado nocturno de la Tierra 🌃: lucecitas de ciudades mezcladas en el
+    // shader según la dirección al Sol (origen). Si la textura no carga, el
+    // onBeforeCompile nunca se instala y todo sigue como antes.
+    if (def.id === 'tierra') {
+      this.#loadReal('2k_earth_nightmap.jpg', (nightTex) => {
+        mat.onBeforeCompile = (shader) => {
+          shader.uniforms.uNightMap = { value: nightTex };
+          shader.uniforms.uNightOn = { value: 1 };
+          this.earthNightUniforms = shader.uniforms;
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', '#include <common>\nvarying vec3 vNightWP;\nvarying vec3 vNightWN;')
+            .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+              vNightWP = (modelMatrix * vec4(position, 1.0)).xyz;
+              vNightWN = normalize((modelMatrix * vec4(normal, 0.0)).xyz);`);
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', `#include <common>
+              uniform sampler2D uNightMap;
+              uniform float uNightOn;
+              varying vec3 vNightWP;
+              varying vec3 vNightWN;`)
+            .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+              float nDay = dot(normalize(vNightWN), normalize(-vNightWP));
+              float nF = smoothstep(0.12, -0.22, nDay) * uNightOn;
+              vec3 city = texture2D(uNightMap, vMapUv).rgb;
+              totalEmissiveRadiance += city * vec3(1.0, 0.82, 0.5) * nF * 1.6;`);
+        };
+        mat.customProgramCacheKey = () => 'tierra-luces-noche';
+        mat.needsUpdate = true;
+      });
+    }
     const mesh = new THREE.Mesh(new THREE.SphereGeometry(def.size, 48, 32), mat);
     mesh.userData = { def, isPickable: true };
     holder.add(mesh);
@@ -268,13 +404,21 @@ export class SolarSystem {
     holder.add(pick);
     this.pickables.push(pick, mesh);
 
-    // Atmósfera (halo azul en la Tierra, tenue en Venus/Marte)
+    // Atmósfera con borde fresnel (azul en la Tierra, del color de cada
+    // gigante gaseoso): brilla pegada a la silueta y se apaga hacia afuera.
     if (def.atmosphere) {
+      const s = def.atmosphere.scale;
       const atm = new THREE.Mesh(
-        new THREE.SphereGeometry(def.size * def.atmosphere.scale, 32, 24),
-        new THREE.MeshBasicMaterial({
-          color: def.atmosphere.color, transparent: true,
-          opacity: def.atmosphere.opacity, side: THREE.BackSide,
+        new THREE.SphereGeometry(def.size * s, 32, 24),
+        new THREE.ShaderMaterial({
+          uniforms: {
+            uColor: { value: new THREE.Color(def.atmosphere.color) },
+            uOpacity: { value: def.atmosphere.opacity * 2.8 },
+            uEdge: { value: Math.sqrt(Math.max(1 - 1 / (s * s), 1e-4)) },
+          },
+          vertexShader: ATMO_VERT,
+          fragmentShader: ATMO_FRAG,
+          side: THREE.BackSide, transparent: true,
           blending: THREE.AdditiveBlending, depthWrite: false,
         })
       );
@@ -364,7 +508,7 @@ export class SolarSystem {
     return { def, pivot, holder, mesh, clouds, moonPivot, moonMesh, label, orbit, pick };
   }
 
-  #makeRings(def) {
+  #makeRings(def, { shadow = true } = {}) {
     const inner = def.size * 1.4, outer = def.size * 2.35;
     const ringGeo = new THREE.RingGeometry(inner, outer, 96);
     // UV radial: u = radio normalizado (compatible con la textura real en franja)
@@ -381,6 +525,32 @@ export class SolarSystem {
     });
     if (def.id === 'saturno') {
       this.#loadReal('2k_saturn_ring_alpha.png', (t) => { ringMat.map = t; ringMat.needsUpdate = true; });
+    }
+    // Sombra del planeta sobre los anillos: el cono de sombra apunta en
+    // dirección Sol→planeta (el Sol vive en el origen). Solo en la escena
+    // real — en el modo comparación el Sol de origen no aplica (shadow:false).
+    if (shadow) {
+      ringMat.onBeforeCompile = (shader) => {
+        shader.uniforms.uPlanetR = { value: def.size };
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vRingWP;\nvarying vec3 vRingC;')
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+            vRingWP = (modelMatrix * vec4(position, 1.0)).xyz;
+            vRingC = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;`);
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', `#include <common>
+            uniform float uPlanetR;
+            varying vec3 vRingWP;
+            varying vec3 vRingC;`)
+          .replace('#include <map_fragment>', `#include <map_fragment>
+            vec3 shL = normalize(vRingC);             // dirección de la luz solar
+            vec3 shD = vRingWP - vRingC;
+            float shT = dot(shD, shL);                // ¿detrás del planeta?
+            float shR = length(shD - shL * shT);      // distancia al eje de sombra
+            float sh = shT > 0.0 ? smoothstep(uPlanetR * 0.88, uPlanetR * 1.08, shR) : 1.0;
+            diffuseColor.rgb *= mix(0.22, 1.0, sh);`);
+      };
+      ringMat.customProgramCacheKey = () => 'anillos-sombra';
     }
     const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = Math.PI / 2;
@@ -562,43 +732,15 @@ export class SolarSystem {
       this.galaxyGroup.add(s);
     }
 
-    // Agujero negro con disco de acreción animado
-    const bh = new THREE.Group();
+    // Agujero negro realista (módulo aparte): horizonte de eventos, disco
+    // kepleriano con Doppler beaming, lente gravitacional barata (anillo de
+    // fotones + arcos) y estrellas que se espaguetizan. Ver js/blackhole.js.
+    this.blackHole = createBlackHole({
+      glowTexture: this.glowTexture,
+      dotTexture: this.dotTexture,
+    });
+    const bh = this.blackHole.group;
     bh.position.set(-330, 110, -380);
-    const hole = new THREE.Mesh(
-      new THREE.SphereGeometry(16, 32, 24),
-      new THREE.MeshBasicMaterial({ color: 0x000000 })
-    );
-    // Disco de acreción: anillo con degradado naranja-blanco
-    const diskCanvas = document.createElement('canvas');
-    diskCanvas.width = 256; diskCanvas.height = 8;
-    const dctx = diskCanvas.getContext('2d');
-    const dg = dctx.createLinearGradient(0, 0, 256, 0);
-    dg.addColorStop(0, 'rgba(255,255,240,1)');
-    dg.addColorStop(0.4, 'rgba(255,170,60,0.9)');
-    dg.addColorStop(1, 'rgba(120,40,10,0)');
-    dctx.fillStyle = dg;
-    dctx.fillRect(0, 0, 256, 8);
-    const diskTex = new THREE.CanvasTexture(diskCanvas);
-    diskTex.colorSpace = THREE.SRGBColorSpace;
-    const diskGeo = new THREE.RingGeometry(20, 52, 64);
-    const dpos = diskGeo.attributes.position, duv = diskGeo.attributes.uv;
-    const dv = new THREE.Vector3();
-    for (let i = 0; i < dpos.count; i++) {
-      dv.fromBufferAttribute(dpos, i);
-      duv.setXY(i, (dv.length() - 20) / 32, 0.5);
-    }
-    this.bhDisk = new THREE.Mesh(diskGeo, new THREE.MeshBasicMaterial({
-      map: diskTex, side: THREE.DoubleSide, transparent: true,
-      depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    this.bhDisk.rotation.x = 1.25;
-    const bhGlow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: this.glowTexture, color: 0xff9540, transparent: true,
-      opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    bhGlow.scale.setScalar(150);
-    bh.add(bhGlow, this.bhDisk, hole);
     this.galaxyGroup.add(bh);
     this.focusTargets.set('agujero', bh);
     const bhPick = new THREE.Mesh(
@@ -847,6 +989,9 @@ export class SolarSystem {
   // ---------- modo comparación 📏 ----------
   enterCompare(onDone) {
     if (!this.compareGroup) this.#buildCompare();
+    // La Tierra comparte material con su copia de la fila: ahí el Sol no está
+    // en el origen, así que las luces de ciudad se apagan durante este modo.
+    if (this.earthNightUniforms) this.earthNightUniforms.uNightOn.value = 0;
     this.compareActive = true;
     this.followTarget = null;
     this.selected = null;
@@ -867,6 +1012,7 @@ export class SolarSystem {
   exitCompare() {
     this.compareActive = false;
     if (this.compareGroup) this.compareGroup.visible = false;
+    if (this.earthNightUniforms) this.earthNightUniforms.uNightOn.value = 1;
     this.solarGroup.visible = true;
   }
 
@@ -893,7 +1039,7 @@ export class SolarSystem {
       } else {
         const rec = this.planets.find((p) => p.def === def);
         mesh = new THREE.Mesh(rec.mesh.geometry, rec.mesh.material);
-        if (def.hasRings) mesh.add(this.#makeRings(def));
+        if (def.hasRings) mesh.add(this.#makeRings(def, { shadow: false }));
       }
       mesh.position.x = x;
       mesh.rotation.z = THREE.MathUtils.degToRad(def.axialTilt ?? 0);
@@ -941,6 +1087,11 @@ export class SolarSystem {
     this.galaxyActive = false;
     this.galaxyGroup.visible = false;
     this.controls.maxDistance = 260;
+  }
+
+  /** El agujero negro "come" una estrellita ya mismo (espaguetización 🍝). */
+  feedBlackHole() {
+    this.blackHole?.feed();
   }
 
   // ---------- fases de la Luna 🌗 ----------
@@ -1020,7 +1171,7 @@ export class SolarSystem {
     const dist = def.focusDist
       ?? (def.id === 'sol' ? def.size * 4
         : def.id === 'iss' || def.id === 'rover' ? 4
-          : def.id === 'agujero' ? 130
+          : def.id === 'agujero' ? 215
             : def.id.startsWith('estrella') ? 60
               : Math.max(def.size * 5.2, 6.5));
     this.followTarget = def;
@@ -1129,11 +1280,27 @@ export class SolarSystem {
     // ISS: vuelta rápida a la Tierra
     if (this.issPivot) this.issPivot.rotation.y += 1.1 * speed * dt;
 
-    // Sol vivo: rotación, capa de granulación contra-rotando, pulso de corona
+    // Sol vivo: rotación, granulación animada (shader), llamaradas y corona
     this.sun.rotation.y += 0.02 * speed * dt;
     this.sunOverlay.rotation.y -= 0.045 * speed * dt;
     this.sunOverlay.rotation.x = Math.sin(this.elapsed * 0.3) * 0.04;
-    const pulse = 1 + Math.sin(this.elapsed * 1.4) * 0.05;
+    this.sunUniforms.uTime.value = this.elapsed;
+
+    // Llamaradas: brotan del borde, crecen, tiemblan y se apagan en otro lado
+    for (const p of this.prominences) {
+      p.t += dt;
+      if (p.t < 0) continue;
+      let h, op;
+      if (p.t < 1.2) { h = easeInOutCubic(p.t / 1.2); op = h; }
+      else if (p.t < 2.8) { h = 1; op = 0.75 + Math.sin(this.elapsed * 7 + p.t) * 0.2; }
+      else if (p.t < 3.8) { h = 1 - (p.t - 2.8); op = h * 0.8; }
+      else { p.t = -(2 + Math.random() * 6); this.#repositionProminence(p); continue; }
+      p.arc.scale.set(0.6 + h * 0.4, Math.max(h, 0.001), 0.6 + h * 0.4);
+      p.arc.material.opacity = op * 0.85;
+    }
+
+    // La corona "respira": dos senos lentos desfasados (nunca mecánico)
+    const pulse = 1 + Math.sin(this.elapsed * 1.4) * 0.05 + Math.sin(this.elapsed * 0.47) * 0.035;
     // La corona se atenúa y se encoge cuando la cámara se acerca al Sol:
     // grande y brillante de lejos, nunca una pantalla amarilla ciega de cerca.
     const sunDist = this.camera.position.length();
@@ -1167,8 +1334,8 @@ export class SolarSystem {
     }
     trailPos.needsUpdate = true;
 
-    // Disco del agujero negro
-    if (this.galaxyActive) this.bhDisk.rotation.z += 0.6 * dt;
+    // Agujero negro: disco, lensing, jets y espaguetización
+    if (this.galaxyActive) this.blackHole.update(dt, this.camera);
 
     // Marcador de la misión del día: estrella que rebota + halo pulsante
     if (this.missionMarker) {
