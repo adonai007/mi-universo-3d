@@ -64,27 +64,31 @@ function award(id) {
 }
 
 // ---------- narración por partes (datos de a uno, con pausa) ----------
+// Además del token de visita, vigila la generación global de habla: si el
+// micrófono 🎤 (o el 🔇) interrumpe, NO se lanza la siguiente frase.
 async function speakFacts(def, token) {
+  const gen = audio.getSpeechGen();
   setCardSpeaking(true);
   let spoke = await audio.speak(def.name + '.');
   for (const fact of def.facts) {
-    if (token !== visitToken) break;
+    if (token !== visitToken || gen !== audio.getSpeechGen()) break;
     spoke = (await audio.speak(fact)) || spoke;
-    if (token !== visitToken) break;
+    if (token !== visitToken || gen !== audio.getSpeechGen()) break;
     await delay(380);
   }
   // Lección día/noche al visitar la Tierra
-  if (def.dayNightFact && token === visitToken) {
+  if (def.dayNightFact && token === visitToken && gen === audio.getSpeechGen()) {
     await audio.speak(def.dayNightFact);
   }
   setCardSpeaking(false);
-  if (!spoke) await delay(2500);   // sin voz: apoyo visual extra
+  if (!spoke && gen === audio.getSpeechGen()) await delay(2500);   // sin voz: apoyo visual extra
 }
 
 // ---------- visitar un objeto (planeta, Sol, ISS, rover, estrellas...) ----------
 async function visitPlanet(def, { fromTour = false } = {}) {
   if (!fromTour) stopTour();
   const token = ++visitToken;
+  const gen = audio.getSpeechGen();   // si el mic/🔇 interrumpe, paramos aquí también
   audio.stopSpeaking();
   audio.blip(def.pitch);
   audio.whoosh();
@@ -97,11 +101,11 @@ async function visitPlanet(def, { fromTour = false } = {}) {
   if (def.id === 'agujero') system.feedBlackHole();
 
   await new Promise((resolve) => system.flyTo(def, resolve));
-  if (token !== visitToken) return;
+  if (token !== visitToken || gen !== audio.getSpeechGen()) return;
 
   audio.playMelody(def.id);        // 🎵 melodía propia del planeta
   await speakFacts(def, token);
-  if (token !== visitToken) return;
+  if (token !== visitToken || gen !== audio.getSpeechGen()) return;
 
   // Pegatina por visita + misión del día
   if (def.id === 'sol' || PLANETS.some((p) => p.id === def.id)) {
@@ -148,21 +152,26 @@ async function startTour() {
   const stops = [SUN, ...PLANETS];
   let aborted = false;
   tourAbort = () => { aborted = true; };
+  // Generación de habla capturada DESPUÉS de exitSpecialModes: apretar el mic
+  // (o el 🔇) la sube y mata la frase actual Y el avance a la siguiente parada.
+  // Los speaks del propio tour no la tocan, así que no se auto-aborta.
+  const gen = audio.getSpeechGen();
+  const interrupted = () => aborted || gen !== audio.getSpeechGen();
 
   for (const def of stops) {
-    if (aborted) break;
+    if (interrupted()) break;
     if (def.tourIntro) {
       setCardSpeaking(true);
       await audio.speak(def.tourIntro);   // frase puente: "volamos más lejos..."
       setCardSpeaking(false);
     }
-    if (aborted) break;
+    if (interrupted()) break;
     await visitPlanet(def, { fromTour: true });
-    if (aborted) break;
+    if (interrupted()) break;
     await delay(700);
   }
 
-  if (!aborted) {
+  if (!interrupted()) {
     award('tour');
     await audio.speak('¡Fin del paseo! ¡Hasta pronto, astronauta!');
     hidePlanetCard();
@@ -258,6 +267,8 @@ async function startQuiz() {
   mode = 'quiz';
   ui.setQuizActive(true);
   system.resetView();          // vista completa: se ven todos los planetas
+  // Igual que en el tour: si el mic 🎤 interrumpe la intro, NO se lanza la pregunta
+  const gen = audio.getSpeechGen();
   quizState = {
     questions: shuffled(QUIZ_QUESTIONS).slice(0, 5)
       .map((q) => ({ q: q.question, answers: [q.answer], hint: q.hint })),
@@ -265,7 +276,7 @@ async function startQuiz() {
   };
   showQuestionCard();
   await audio.speak('¡Vamos a jugar! Yo pregunto y tú tocas el planeta.');
-  askCurrent();
+  if (quizState && gen === audio.getSpeechGen()) askCurrent();
 }
 
 async function startLevels() {
@@ -274,6 +285,7 @@ async function startLevels() {
   mode = 'levels';
   ui.setLevelsActive(true);
   system.resetView();          // vista completa: se ven todos los planetas
+  const gen = audio.getSpeechGen();   // el mic 🎤 corta la cadena intro → pregunta
   const saved = loadQuizLevel();
   const lvl = Math.min(saved.level, QUIZ_LEVELS.length - 1);
   if (saved.level >= QUIZ_LEVELS.length) {
@@ -285,8 +297,8 @@ async function startLevels() {
     idx: 0, correct: 0, kind: 'levels', level: lvl,
   };
   showQuestionCard();
-  await audio.speak(levelData.intro);
-  askCurrent();
+  if (gen === audio.getSpeechGen()) await audio.speak(levelData.intro);
+  if (quizState && gen === audio.getSpeechGen()) askCurrent();
 }
 
 function askCurrent() {
@@ -297,6 +309,9 @@ function askCurrent() {
 
 async function handleQuizTap(def) {
   if (!quizState) return;
+  // El mic 🎤 a mitad de la cadena (feedback → siguiente pregunta) la corta:
+  // cancela la frase en curso Y evita que hablemos la próxima con el mic apretado.
+  const gen = audio.getSpeechGen();
   const q = quizState.questions[quizState.idx % quizState.questions.length];
   system.markUserActivity();
   if (q.answers.includes(def.id)) {
@@ -310,7 +325,7 @@ async function handleQuizTap(def) {
 
     if (quizState.kind === 'quiz' && quizState.idx >= quizState.questions.length) {
       award('quiz');
-      await audio.speak('¡Ganaste! ¡Eres una súper exploradora o un súper explorador!');
+      if (gen === audio.getSpeechGen()) await audio.speak('¡Ganaste! ¡Eres una súper exploradora o un súper explorador!');
       exitSpecialModes();
       return;
     }
@@ -319,17 +334,18 @@ async function handleQuizTap(def) {
       const saved = loadQuizLevel();
       if (saved.level === lvl) saveQuizLevel({ level: lvl + 1 });
       award(`level-${lvl + 1}`);
-      await audio.speak('¡Tres aciertos! ¡Subiste de nivel! ¡Fantástico!');
+      if (gen === audio.getSpeechGen()) await audio.speak('¡Tres aciertos! ¡Subiste de nivel! ¡Fantástico!');
       exitSpecialModes();
       return;
     }
+    if (!quizState || gen !== audio.getSpeechGen()) return;   // interrumpidos: la cadena para aquí
     showQuestionCard();
     askCurrent();
   } else {
     // Error: pista amable, sin penalización
     audio.gentle();
     await audio.speak(q.hint);
-    if (quizState) askCurrent();
+    if (quizState && gen === audio.getSpeechGen()) askCurrent();
   }
 }
 
@@ -349,8 +365,7 @@ function exitSpecialModes() {
   ui.setGalaxyActive(false);
   ui.setQuizActive(false);
   ui.setLevelsActive(false);
-  audio.stopSpeaking();
-  audio.stopMelody();
+  boti.stopAllSpeech();   // interrupción TOTAL: synth, melodía y mp3 de ElevenLabs
   setCardSpeaking(false);
 }
 
@@ -372,7 +387,8 @@ const ui = initUI(settings, {
   onQuiz: startQuiz,
   onLevels: startLevels,
   onSoundToggle(on) {
-    audio.setMuted(!on);
+    audio.setMuted(!on);                 // silenciar ya interrumpe TODO al instante
+    if (!on) boti.stopAllSpeech();       // y Boti apaga su animación de hablar
     if (on) audio.twinkle();
     setCardSpeaking(false);
   },
@@ -418,14 +434,15 @@ const ui = initUI(settings, {
       case 'labels': system.setLabelsVisible(value); break;
     }
   },
+  // Chips de estado del panel 🎨 (ui.js los repinta al abrir el panel)
+  getBotiStatus: () => boti.getStatus(),
 });
 
 // El niño se alejó mucho con la rueda/pellizco: la escena soltó el planeta.
 // Dejamos todo consistente: sin tarjeta, sin narración, modo libre.
 system.onDeselect = () => {
   ++visitToken;             // cancela la narración en curso
-  audio.stopSpeaking();
-  audio.stopMelody();
+  boti.stopAllSpeech();     // interrupción total (synth, melodía y mp3)
   setCardSpeaking(false);
   hidePlanetCard();
   if (mode === 'tour') stopTour();
@@ -552,4 +569,6 @@ window.__universo = {
     if (def) visitPlanet(def);
   },
   moonMode: () => enterMoonMode(),
+  botiState: () => boti.getStatus(),
+  log: () => window.__botiLog ?? [],
 };

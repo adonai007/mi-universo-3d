@@ -69,14 +69,17 @@ const CANNED = {
   error: '¡Ay! Mis circuitos se enredaron un poquito. ¿Me lo preguntas otra vez? 🤖',
 };
 
-// ---------- Rate limit casero: 10 preguntas/minuto por IP ----------
+// ---------- Rate limit casero: 10 req/minuto por IP y por CUBETA ----------
+// /api/ask y /api/log usan cubetas SEPARADAS: los beacons de depuración jamás
+// deben gastarle las preguntas al niño (el cliente además se autolimita a 5).
 const hits = new Map();
-function rateLimited(ip) {
+function rateLimited(ip, bucket = 'ask') {
+  const key = `${bucket}:${ip}`;
   const now = Date.now();
-  const list = (hits.get(ip) || []).filter((t) => now - t < 60_000);
+  const list = (hits.get(key) || []).filter((t) => now - t < 60_000);
   if (list.length >= 10) return true;
   list.push(now);
-  hits.set(ip, list);
+  hits.set(key, list);
   if (hits.size > 1000) hits.clear();   // higiene de memoria
   return false;
 }
@@ -87,6 +90,7 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.post('/api/ask', async (req, res) => {
+  const t0 = Date.now();
   const { question, name, age } = req.body ?? {};
   const cleanName = String(name || '').slice(0, 24);
 
@@ -98,10 +102,12 @@ app.post('/api/ask', async (req, res) => {
   }
   // Filtro de entrada: temas prohibidos → respuesta enlatada, sin LLM
   if (BLOCKED_INPUT.some((re) => re.test(question))) {
+    console.log('[ask] guard', `${Date.now() - t0}ms`);
     return res.json({ ok: true, text: CANNED.blocked(cleanName), source: 'guard' });
   }
   // Sin clave: el frontend usa su banco local (responder con gracia, nunca 500)
   if (!anthropic) {
+    console.log('[ask] no-llm', `${Date.now() - t0}ms`);
     return res.json({ ok: false, reason: 'no-llm' });
   }
 
@@ -117,6 +123,9 @@ app.post('/api/ask', async (req, res) => {
       .map((b) => b.text)
       .join(' ')
       .trim();
+    // Log de éxito (no solo de error): en Render es la única pista de que
+    // el pipeline completo respondió, aunque en el aparato no se oiga nada.
+    console.log('[ask] llm', `${Date.now() - t0}ms`);
     res.json({ ok: true, text: text || CANNED.error, source: 'llm' });
   } catch (err) {
     console.error('[ask]', err.status ?? '', err.message);
@@ -129,6 +138,7 @@ app.post('/api/ask', async (req, res) => {
 // la consola del navegador en cada frase de Boti. El frontend distingue
 // audio real de error por el Content-Type.
 app.post('/api/tts', async (req, res) => {
+  const t0 = Date.now();
   if (!TTS_KEY) return res.json({ ok: false, reason: 'no-tts' });
   if (ttsDead) return res.json({ ok: false, reason: 'tts-disabled' });
   const text = String(req.body?.text || '').slice(0, 500);
@@ -165,12 +175,28 @@ app.post('/api/tts', async (req, res) => {
         status: r.status,
       });
     }
+    const buf = Buffer.from(await r.arrayBuffer());
     res.setHeader('Content-Type', 'audio/mpeg');
-    res.send(Buffer.from(await r.arrayBuffer()));
+    res.send(buf);
+    // Log de éxito: bytes reales enviados (si dio 200 pero 0 bytes, se ve aquí)
+    console.log('[tts] ok', `${buf.length}B`, `${Date.now() - t0}ms`);
   } catch (err) {
     console.error('[tts]', err.message);
     res.json({ ok: false, reason: 'network' });
   }
+});
+
+// ---------- Bitácora del cliente ----------
+// El frontend manda un beacon SOLO en fallos graves (speak-fail / not-allowed /
+// network): así se puede depurar la voz en Render sin tener el aparato en la mano.
+app.post('/api/log', (req, res) => {
+  if (rateLimited(req.ip, 'log')) return res.status(429).json({ ok: false });
+  const tag = String(req.body?.tag ?? '').slice(0, 40);
+  if (!tag) return res.status(400).json({ ok: false });
+  let data = '';
+  try { data = JSON.stringify(req.body?.data ?? null).slice(0, 300); } catch { /* sin datos */ }
+  console.log('[client]', tag, data);
+  res.json({ ok: true });
 });
 
 // ---------- HTTPS con certificado auto-firmado ----------

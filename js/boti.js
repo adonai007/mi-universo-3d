@@ -84,11 +84,20 @@ export function initBoti() {
   let recognition = null;
   let currentAudio = null;
 
+  // Desbloqueo de la voz en el PRIMER gesto (bienvenida, mic, canvas, lo que
+  // sea): Chrome Android exige un speak dentro de un gesto del usuario o Boti
+  // queda mudo toda la sesión. unlockSpeech es idempotente.
+  document.addEventListener('pointerdown', audio.unlockSpeech, { capture: true });
+  document.addEventListener('click', audio.unlockSpeech, { capture: true });
+
   // Detectar capacidades del backend. En GitHub Pages no hay /api: saltamos
   // el fetch para no generar un 404 en consola — modo banco local directo.
   if (!location.hostname.endsWith('github.io')) {
     fetch('api/health').then((r) => (r.ok ? r.json() : null)).then((h) => {
-      if (h) capabilities = h;
+      if (h) {
+        capabilities = h;
+        audio.logEvent('health', h);
+      }
     }).catch(() => { /* estático puro: banco local + voz del navegador */ });
   }
 
@@ -122,33 +131,49 @@ export function initBoti() {
   // navegador SIN romper el flujo, y tras 2 fallos dejamos de intentar el TTS
   // remoto durante toda la sesión (el backend también se auto-degrada).
   let ttsFailures = 0;
-  let speakGen = 0;   // generación de habla: al subir, las hablas anteriores se invalidan
+  let speakId = 0;    // habla vigente de Boti: una nueva siempre releva a la anterior
 
   /**
    * Corta TODA la voz en curso de un plumazo: la de Boti (audio ElevenLabs y
-   * speechSynthesis), la narración del juego (audio.js usa speechSynthesis
-   * también) y la animación "hablando". Centralizada para no duplicar.
+   * speechSynthesis), la narración del juego, la melodía del planeta y la
+   * animación "hablando". La generación global de audio.js invalida además
+   * cualquier botiSpeak o tour en curso. Centralizada para no duplicar.
    */
   function stopAllSpeech() {
-    speakGen++;                 // invalida cualquier botiSpeak en curso
-    audio.stopSpeaking();       // speechSynthesis: voz de Boti y narración de planetas
-    if (currentAudio) {
-      try { currentAudio.pause(); } catch { /* ya parado */ }
-      currentAudio = null;
-    }
+    audio.interruptSpeech();    // generación++, synth, melodía y mp3 de ElevenLabs
+    currentAudio = null;
     setTalking(false);
   }
 
-  async function botiSpeak(text) {
-    if (audio.isMuted()) return;
-    stopAllSpeech();            // si ya estaba hablando, la respuesta vieja se cancela (no se encola)
-    const gen = speakGen;
-    setTalking(true);
-    showBubble(text);                              // la burbuja muestra el ORIGINAL (con emojis)
+  /**
+   * Habla de Boti. `interrupt: false` = habla "suave" para celebraciones y
+   * comentarios que son PARTE del flujo: NO sube la generación global, así no
+   * aborta el tour en curso ni corta la melodía del planeta. El micrófono y
+   * el 🔇 sí la matan (la generación capturada aquí deja de coincidir) y de
+   * paso matan también al tour que la disparó: una sola interrupción para todo.
+   */
+  async function botiSpeak(text, { interrupt = true } = {}) {
+    if (interrupt) stopAllSpeech(); // si ya estaba hablando, la respuesta vieja se cancela (no se encola)
+    const gen = audio.getSpeechGen();
+    const myId = ++speakId;
+    // "vigente" = ningún botiSpeak nuevo tomó el relevo; "viva" = además nadie interrumpió
+    const isCurrent = () => myId === speakId;
+    const isAlive = () => isCurrent() && gen === audio.getSpeechGen();
+    showBubble(text);           // la burbuja SIEMPRE (muestra el ORIGINAL, con emojis):
+    //                             el apoyo visual no depende de que haya voz
+    const longBubble = Math.max(4000, text.length * 90);
+    if (audio.isMuted()) {
+      // Silenciado 🔇: el niño VE el mensaje y el botón de sonido se menea
+      // (la pista de POR QUÉ Boti no habla).
+      wiggleSoundBtn();
+      hideBubbleSoon(longBubble);
+      return;
+    }
     const speechText = audio.cleanForSpeech(text); // la voz solo recibe texto limpio
+    setTalking(true);
+    let spoke = false;
     try {
       if (capabilities.tts && speechText) {
-        let played = false;
         try {
           const r = await fetch('api/tts', {
             method: 'POST',
@@ -159,31 +184,48 @@ export function initBoti() {
           const isAudio = (r.headers.get('content-type') || '').includes('audio');
           if (r.ok && isAudio) {
             const blob = await r.blob();
-            if (gen !== speakGen) return;   // nos interrumpieron mientras llegaba el audio
+            if (!isAlive()) return;   // nos interrumpieron mientras llegaba el audio
             if (blob.size > 0) {
               await new Promise((resolve) => {
                 if (currentAudio) { currentAudio.pause(); }
                 currentAudio = new Audio(URL.createObjectURL(blob));
+                audio.registerExternalAudio(currentAudio);  // interruptSpeech() lo puede pausar
                 currentAudio.onended = resolve;
                 currentAudio.onerror = resolve;
                 currentAudio.onpause = resolve;   // interrumpido por stopAllSpeech()
                 currentAudio.play().catch(resolve);
               });
-              played = true;
+              spoke = true;
+              audio.logEvent('speak', { engine: 'elevenlabs', len: speechText.length });
             }
           }
         } catch { /* error de red: cuenta como fallo */ }
-        if (played || gen !== speakGen) return;
-        ttsFailures++;
-        if (ttsFailures >= 2) capabilities.tts = false;   // no insistir esta sesión
+        if (!spoke && isAlive()) {
+          ttsFailures++;
+          if (ttsFailures >= 2) capabilities.tts = false;   // no insistir esta sesión
+        }
       }
-      if (gen !== speakGen) return;   // interrumpido: no arrancar la voz del navegador
-      await audio.speak(text);   // fallback: voz del navegador
+      if (!spoke && isAlive()) {
+        spoke = await audio.speak(text);   // fallback: voz del navegador
+        audio.logEvent('speak', { engine: 'synth', ok: spoke, len: speechText.length });
+      }
     } finally {
-      // Solo la habla "vigente" puede apagar la animación (una nueva ya tomó el relevo)
-      if (gen === speakGen) {
-        setTalking(false);
-        hideBubbleSoon();
+      // Solo la habla "vigente" toca la interfaz (una nueva ya tomó el relevo)
+      if (isCurrent()) {
+        if (gen === audio.getSpeechGen()) {
+          setTalking(false);
+          if (spoke) {
+            hideBubbleSoon(1200);         // la voz REAL acaba de terminar
+          } else {
+            // No habló de verdad (motor mudo, sin voces): burbuja larga + pista
+            wiggleSoundBtn();
+            hideBubbleSoon(longBubble);
+          }
+        } else {
+          // Interrumpidos por mic/🔇/salida: stopAllSpeech ya apagó la animación,
+          // pero la burbuja NO debe quedar pegada en pantalla para siempre.
+          hideBubbleSoon(longBubble);
+        }
       }
     }
   }
@@ -251,68 +293,214 @@ export function initBoti() {
     bubble.textContent = text;
     bubble.classList.remove('hidden');
   }
-  function hideBubbleSoon() {
+  function hideBubbleSoon(ms = 3500) {
     clearTimeout(bubbleTimer);
-    bubbleTimer = setTimeout(() => bubble.classList.add('hidden'), 3500);
+    bubbleTimer = setTimeout(() => bubble.classList.add('hidden'), ms);
   }
 
-  // Tocar a Boti → frase simpática
+  /** El 🔇/🔊 se menea: "Boti quiso hablar y no pudo" (pista para el adulto). */
+  function wiggleSoundBtn() {
+    const btn = $('btn-sound');
+    if (!btn) return;
+    btn.classList.remove('sound-wiggle');
+    void btn.offsetWidth;             // reinicia la animación CSS
+    btn.classList.add('sound-wiggle');
+    btn.addEventListener('animationend', () => btn.classList.remove('sound-wiggle'), { once: true });
+  }
+
+  // Tocar a Boti → frase simpática. Mantenerlo apretado (~700 ms) → Boti DICE
+  // su estado completo con voz (diagnóstico para el adulto, sin leer nada).
   const IDLE_PHRASES = [
     '¡Aprieta el micrófono y pregúntame algo del espacio! 🎤',
     '¿Sabías que en Júpiter caben mil Tierras? ¡Pregúntame más! 🟤',
     '¡Bip bup! ¡Me encantan las estrellas! ⭐',
   ];
+  let longPressTimer = null;
+  let longPressFired = false;
+  botiEl.addEventListener('pointerdown', () => {
+    longPressFired = false;
+    clearTimeout(longPressTimer);
+    longPressTimer = setTimeout(() => { longPressFired = true; speakStatus(); }, 700);
+  });
+  botiEl.addEventListener('pointerup', () => clearTimeout(longPressTimer));
+  botiEl.addEventListener('pointerleave', () => clearTimeout(longPressTimer));
   botiEl.addEventListener('click', () => {
+    if (longPressFired) { longPressFired = false; return; }   // ya habló el estado
     botiSpeak(IDLE_PHRASES[(Math.random() * IDLE_PHRASES.length) | 0]);
   });
 
   // ---------- micrófono walkie-talkie ----------
+  // Máquina de estados VISIBLE: ready | listening | blocked | nosupport.
+  // El niño la VE (anillo verde, 👂, 🔒) y la OYE (earcons + voz de Boti):
+  // nunca más "aprieto y no pasa nada" sin explicación.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let micState = SR ? 'ready' : 'nosupport';
+  const BLOCKED_MSG = 'No puedo escucharte por el micrófono. Pide ayuda a un grande para encenderlo. 🔒';
+  let blockedSpoken = false;     // el aviso hablado tras un error not-allowed: 1 vez por sesión
+  let audioStarted = false;      // llegó onaudiostart (el mic abrió de verdad)
+  let audioStartTimer = null;
+  let pendingStart = false;      // doble-tap o reintento: re-arrancar cuando el motor cierre
+  let networkRetried = false;    // error 'network': 1 reintento silencioso por pulsación
+  let hadError = false;
+  let gotResult = false;
+  let pressStart = 0;
+  let lastPressMs = 0;
+
+  function setMicState(s) {
+    micState = s;
+    micBtn.classList.toggle('ready', s === 'ready');
+    micBtn.classList.toggle('listening', s === 'listening');
+    micBtn.classList.toggle('blocked', s === 'blocked');
+    botiEl.classList.toggle('listening', s === 'listening');
+  }
+
+  /** Fase 2 del feedback: "Te escucho 👂" cuando el micro abre DE VERDAD. */
+  function showListeningUI() {
+    if (audioStarted) return;
+    audioStarted = true;
+    clearTimeout(audioStartTimer);
+    setMicState('listening');
+    showBubble('Te escucho… 👂');
+  }
+
+  /** El permiso está denegado: NO insistir con el motor; Boti lo explica con voz. */
+  function explainBlocked() {
+    audio.earconBlocked();
+    typePanel.classList.remove('hidden');   // los padres pueden escribir mientras tanto
+    botiSpeak(BLOCKED_MSG);
+  }
+
   if (SR) {
     recognition = new SR();
     recognition.lang = 'es-ES';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.onresult = (e) => {
-      const transcript = e.results?.[0]?.[0]?.transcript ?? '';
-      if (transcript) askBoti(transcript);
+      const transcript = (e.results?.[0]?.[0]?.transcript ?? '').trim();
+      if (transcript) {
+        gotResult = true;
+        askBoti(transcript);
+      }
     };
-    recognition.onerror = () => { stopListening(); };
-    recognition.onend = () => { stopListening(); };
+    recognition.onaudiostart = () => {
+      if (listening) showListeningUI();
+    };
+    // Cada error tiene su señal (earcon + frase): el silencio ya no es la respuesta
+    recognition.onerror = (e) => {
+      const code = e?.error || 'unknown';
+      audio.logEvent('rec-error', { code });
+      hadError = true;
+      if (code === 'aborted') return;        // lo abortamos nosotros: silencio
+      if (code === 'not-allowed' || code === 'service-not-allowed' || code === 'audio-capture') {
+        audio.logEvent('not-allowed', { code });
+        stopListening({ abort: true });
+        setMicState('blocked');
+        typePanel.classList.remove('hidden');
+        audio.earconBlocked();
+        if (!blockedSpoken) {
+          blockedSpoken = true;
+          botiSpeak(BLOCKED_MSG);
+        }
+        return;
+      }
+      if (code === 'network') {
+        audio.logEvent('network', { retry: !networkRetried });
+        if (!networkRetried) {
+          networkRetried = true;
+          pendingStart = true;               // onend re-arranca el motor: 1 reintento
+          return;
+        }
+        stopListening();
+        audio.earconConfused();
+        botiSpeak('Mi antena falló un poquito. ¡Probamos otra vez! 📡');
+        return;
+      }
+      if (code === 'no-speech') {
+        stopListening();
+        audio.earconConfused();
+        botiSpeak('No te escuché. Aprieta el botón y háblame fuerte, ¿sí? 🎤');
+        return;
+      }
+      stopListening();
+    };
+    recognition.onend = () => {
+      if (pendingStart) {
+        // Doble-tap o reintento de red: el motor YA cerró, ahora sí arranca
+        pendingStart = false;
+        if (listening) {
+          hadError = false;
+          try { recognition.start(); return; } catch { /* se rindió: seguimos abajo */ }
+        }
+      }
+      const pressMs = listening ? performance.now() - pressStart : lastPressMs;
+      stopListening();
+      // Pulsación larga sin transcript: el niño habló pero no se entendió nada
+      if (!gotResult && !hadError && pressMs > 400) {
+        audio.earconConfused();
+        botiSpeak('¿Me lo dices otra vez? 👂');
+      }
+    };
   }
-
-  let listenTimer = null;
 
   function startListening() {
-    if (!recognition || listening) return;
+    if (!recognition) return;
+    if (micState === 'blocked') { explainBlocked(); return; }
+    if (listening) return;
     listening = true;
+    gotResult = false;
+    hadError = false;
+    networkRetried = false;
+    pressStart = performance.now();
+    lastPressMs = 0;
     stopAllSpeech();            // Boti se calla AL INSTANTE: el niño manda 🎤
-    audio.blip(1.6);            // feedback inmediato: "te escucho"
-    micBtn.classList.add('listening');
-    botiEl.classList.add('listening');
-    showBubble('Te escucho… 👂');
-    // Pequeña espera tras cortar la voz para que el micro no capture
-    // la cola del audio de Boti (eco) antes de empezar a reconocer.
-    clearTimeout(listenTimer);
-    listenTimer = setTimeout(() => {
-      if (!listening) return;
-      try { recognition.start(); } catch { /* ya activo */ }
-    }, 150);
+    audio.earconListen();       // feedback fase 1: "botón apretado"
+    micBtn.classList.add('pressed');
+    audioStarted = false;
+    clearTimeout(audioStartTimer);
+    // Si el motor no dispara onaudiostart en 1 s, mostramos "Te escucho" igual
+    audioStartTimer = setTimeout(() => { if (listening) showListeningUI(); }, 1000);
+    try {
+      recognition.start();
+    } catch {
+      // Doble-tap: el motor anterior aún estaba cerrando (InvalidStateError) →
+      // abort() y re-arrancar cuando llegue su onend (pendingStart).
+      pendingStart = true;
+      try { recognition.abort(); } catch { /* ya parado */ }
+    }
   }
-  function stopListening() {
+  function stopListening({ abort = false } = {}) {
+    clearTimeout(audioStartTimer);
+    micBtn.classList.remove('pressed');
     if (!listening) return;
     listening = false;
-    clearTimeout(listenTimer);
-    micBtn.classList.remove('listening');
-    botiEl.classList.remove('listening');
+    lastPressMs = performance.now() - pressStart;
+    audioStarted = false;
+    if (micState === 'listening') setMicState('ready');
     hideBubbleSoon();
-    try { recognition?.stop(); } catch { /* ya parado */ }
+    // El corte por interrupción usa abort() (tira lo oído); el pointerup
+    // normal usa stop() para que el resultado pendiente sí llegue.
+    try { abort ? recognition?.abort() : recognition?.stop(); } catch { /* ya parado */ }
   }
 
   if (SR) {
     micBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startListening(); });
-    micBtn.addEventListener('pointerup', stopListening);
-    micBtn.addEventListener('pointerleave', stopListening);
+    micBtn.addEventListener('pointerup', () => stopListening());
+    micBtn.addEventListener('pointerleave', () => stopListening());
+    setMicState(micState);      // pinta el estado inicial (anillo verde "listo")
+
+    // Permiso del micrófono visible desde el arranque y si cambia en vivo.
+    // OJO: permissions.query({name:'microphone'}) LANZA en Firefox → try/catch.
+    try {
+      navigator.permissions?.query({ name: 'microphone' }).then((st) => {
+        const apply = () => {
+          audio.logEvent('mic-permission', { state: st.state });
+          if (st.state === 'denied') setMicState('blocked');
+          else if (micState === 'blocked') setMicState('ready');
+        };
+        apply();
+        st.onchange = apply;
+      }).catch(() => { /* sin Permissions API: nos enteramos al primer intento */ });
+    } catch { /* Firefox y similares */ }
   } else {
     // Sin SpeechRecognition (p. ej. Firefox): teclado simple
     micBtn.textContent = '⌨️';
@@ -332,6 +520,33 @@ export function initBoti() {
   };
   $('boti-type-go').addEventListener('click', sendTyped);
   $('boti-type-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendTyped(); });
+
+  // ---------- estado para el adulto ----------
+  /** Estado actual de Boti: chips del panel 🎨 y long-press sobre el robot. */
+  function getStatus() {
+    return {
+      mic: micState,                                        // ready|listening|blocked|nosupport
+      brain: capabilities.llm ? 'ia' : 'banco',             // 🧠✨ / 🧠📚
+      voice: capabilities.tts ? 'premium' : 'navegador',    // 🗣️💎 / 🗣️📱
+    };
+  }
+
+  /** Boti DICE su estado con voz (long-press: el adulto no necesita leer). */
+  function speakStatus() {
+    const s = getStatus();
+    const micMsg = s.mic === 'blocked'
+      ? 'Mi micrófono está bloqueado: pide ayuda a un grande para encenderlo.'
+      : s.mic === 'nosupport'
+        ? 'Este aparato no tiene micrófono para mí: escríbeme con el teclado.'
+        : 'Mi micrófono funciona.';
+    const brainMsg = s.brain === 'ia'
+      ? 'Pienso con mi cerebro de robot.'
+      : 'Pienso con mi libro de estrellas.';
+    const voiceMsg = s.voice === 'premium'
+      ? 'Hablo con mi voz especial.'
+      : 'Hablo con la voz del aparato.';
+    botiSpeak(`${micMsg} ${brainMsg} ${voiceMsg}`);
+  }
 
   // ---------- pantalla de bienvenida ----------
   const welcome = document.createElement('div');
@@ -422,7 +637,9 @@ export function initBoti() {
     /** Celebra una pegatina nueva por nombre del niño. */
     celebrateSticker() {
       const p = activeProfile();
-      botiSpeak(`¡Bravo ${p?.name ?? ''}! ¡Pegatina nueva para tu álbum! 🎉`);
+      // Habla SUAVE: la celebración es parte del flujo — no debe abortar el
+      // tour ni cortar la melodía del planeta (el mic sí la mata, y al tour).
+      botiSpeak(`¡Bravo ${p?.name ?? ''}! ¡Pegatina nueva para tu álbum! 🎉`, { interrupt: false });
     },
     /** A veces comenta el planeta visitado (después de la narración). */
     maybeCommentPlanet(def) {
@@ -433,11 +650,13 @@ export function initBoti() {
         `¡Bip bup! ¡Qué bonito se ve ${def.name} desde aquí!`,
         `¿Sabes que vine una vez a ${def.name} en mi nave? ¡Bip!`,
       ];
-      botiSpeak(comments[(Math.random() * comments.length) | 0]);
+      // Habla SUAVE: comentario del flujo, no interrumpe melodía ni narración
+      botiSpeak(comments[(Math.random() * comments.length) | 0], { interrupt: false });
     },
     speak: botiSpeak,
     stopAllSpeech,
     ask: askBoti,
     getProfile: activeProfile,
+    getStatus,
   };
 }

@@ -324,6 +324,15 @@ html, body {
   z-index: 12;
 }
 
+/* Pantallas medianas (~750-1100px): la barra central llega tan a la izquierda
+   que el micrófono tapaba el 🏠 e interceptaba sus toques. Boti y su mic suben
+   a una segunda fila sobre la barra (el cajón 🎮 queda a su derecha sin chocar).
+   En >1100px y en móviles (≤740px) nada cambia. */
+@media (max-width: 1100px) and (min-width: 741px) {
+  #boti-hud { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 100px); }
+  #boti-type { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 320px); }
+}
+
 #boti {
   position: relative;
   width: 86px;
@@ -453,6 +462,59 @@ html, body {
   50% { transform: scale(1.12); box-shadow: 0 0 0 16px rgba(255, 110, 130, 0); }
 }
 
+/* Máquina de estados del micrófono: listo (anillo verde que respira),
+   apretado (se hunde), escuchando (👂), bloqueado (gris + 🔒).
+   El niño VE el estado sin leer nada. */
+#btn-mic.ready {
+  border-color: rgba(130, 230, 170, 0.75);
+  animation: mic-ready 2.8s ease-in-out infinite;
+}
+@keyframes mic-ready {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(130, 230, 170, 0.45); }
+  50% { box-shadow: 0 0 0 12px rgba(130, 230, 170, 0); }
+}
+#btn-mic.pressed { transform: scale(0.92); }
+#btn-mic.blocked {
+  filter: grayscale(1);
+  background: rgba(70, 70, 95, 0.65);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+/* Insignias 👂/🔒: reutilizan el ::after del tooltip (el id pesa más que [data-tip]) */
+#btn-mic.listening::after,
+#btn-mic.blocked::after {
+  left: auto;
+  right: -8px;
+  bottom: auto;
+  top: -12px;
+  transform: none;
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 1.7rem;
+  opacity: 1;
+  transition: none;
+}
+#btn-mic.listening::after { content: '👂'; }
+#btn-mic.blocked::after { content: '🔒'; }
+
+/* El 🔇 se menea cuando Boti quiso hablar y no pudo (pista para el adulto) */
+.sound-wiggle { animation: sound-wiggle 0.9s ease-in-out; }
+@keyframes sound-wiggle {
+  0%, 100% { transform: rotate(0deg); }
+  10%, 43%, 76% { transform: rotate(-12deg); }
+  26%, 60%, 92% { transform: rotate(12deg); }
+}
+
+/* Chips de estado de Boti en el panel 🎨 (solo emoji, territorio adulto) */
+.status-chip {
+  font-size: 1.35rem;
+  line-height: 1;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+}
+
 /* Teclado fallback (sin reconocimiento de voz) */
 #boti-type {
   position: fixed;
@@ -576,6 +638,7 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .card-emoji, #planet-card, #style-panel { animation: none !important; }
   #boti, .welcome-boti, .boti-antenna-ball { animation: none !important; }
+  #btn-mic.ready, #btn-mic.listening, .sound-wiggle { animation: none !important; }
 }
 
 /* ---- Tooltips (título visible al pasar el mouse o navegar con teclado) ----

@@ -120,7 +120,36 @@ export function initUI(settings, handlers) {
     paintPause(handlers.onPauseToggle());
   });
 
-  $('btn-style').addEventListener('click', (e) => togglePanel('style', e.currentTarget));
+  $('btn-style').addEventListener('click', (e) => {
+    togglePanel('style', e.currentTarget);
+    if (!panels.style.classList.contains('hidden')) paintStatusChips();
+  });
+
+  // --- Chips de estado de Boti (territorio adulto, solo emoji) ---
+  // Se repintan cada vez que se abre el panel 🎨 con el estado real de Boti.
+  function paintStatusChips() {
+    const s = handlers.getBotiStatus?.();
+    if (!s) return;
+    const mic = $('chip-mic');
+    const brain = $('chip-brain');
+    const voice = $('chip-voice');
+    if (!mic || !brain || !voice) return;
+    const micOk = s.mic !== 'blocked' && s.mic !== 'nosupport';
+    mic.textContent = micOk ? '🎤✅' : '🎤🚫';
+    mic.setAttribute('aria-label', micOk
+      ? 'Micrófono funcionando'
+      : s.mic === 'blocked'
+        ? 'Micrófono bloqueado: revisa el permiso del navegador'
+        : 'Sin reconocimiento de voz: usa el teclado');
+    brain.textContent = s.brain === 'ia' ? '🧠✨' : '🧠📚';
+    brain.setAttribute('aria-label', s.brain === 'ia'
+      ? 'Respuestas con inteligencia artificial'
+      : 'Respuestas del banco local de preguntas');
+    voice.textContent = s.voice === 'premium' ? '🗣️💎' : '🗣️📱';
+    voice.setAttribute('aria-label', s.voice === 'premium'
+      ? 'Voz premium de ElevenLabs'
+      : 'Voz del navegador');
+  }
 
   // --- Panel de personalización 🎨 ---
   const slider = $('speed-slider');

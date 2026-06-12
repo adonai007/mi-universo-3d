@@ -4,6 +4,11 @@ let ctx = null;
 let muted = false;
 let spanishVoice = undefined; // undefined = aún no buscada; null = no hay
 let melodyNodes = [];         // para poder detener melodías al cambiar de planeta
+let speechGen = 0;            // generación global de habla: al subir, lo anterior queda inválido
+let externalAudio = null;     // <audio> de ElevenLabs registrado por boti.js
+let speechUnlocked = false;   // ya hicimos el "prime" dentro de un gesto del usuario
+let waitedForVoices = false;  // la espera de voiceschanged se hace UNA vez por sesión
+let voicesWait = null;        // espera compartida: speaks concurrentes esperan JUNTOS
 
 function audioCtx() {
   if (!ctx) {
@@ -15,12 +20,35 @@ function audioCtx() {
   return ctx;
 }
 
+// ---------- Bitácora ligera 📋 (consola + ring buffer para depurar en el aparato) ----------
+// Los tags críticos viajan también al servidor (beacon) para verlos en Render
+// sin tener el celular en la mano. Tope por sesión: depurar sí, inundar no —
+// los beacons jamás deben gastarle el rate limit de preguntas al niño.
+const BEACON_TAGS = ['speak-fail', 'not-allowed', 'network'];
+const BEACON_MAX = 5;
+let beaconsSent = 0;
+
+export function logEvent(tag, data) {
+  console.info('[boti]', tag, data ?? '');
+  const log = (window.__botiLog = window.__botiLog ?? []);
+  log.push({ t: Date.now(), tag, data: data ?? null });
+  if (log.length > 60) log.shift();
+  if (BEACON_TAGS.includes(tag) && beaconsSent < BEACON_MAX && !location.hostname.endsWith('github.io')) {
+    beaconsSent++;
+    try {
+      const body = JSON.stringify({ tag, data: data ?? null });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('api/log', new Blob([body], { type: 'application/json' }));
+      } else {
+        fetch('api/log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {});
+      }
+    } catch { /* sin red o sin beacon: la bitácora local basta */ }
+  }
+}
+
 export function setMuted(m) {
   muted = m;
-  if (m) {
-    if ('speechSynthesis' in window) speechSynthesis.cancel();
-    stopMelody();
-  }
+  if (m) interruptSpeech();   // 🔇 = silencio TOTAL: voz, melodía y mp3 de ElevenLabs
 }
 export function isMuted() { return muted; }
 
@@ -129,6 +157,25 @@ export function click() {
   tone({ freq: 420, time: 0.08, type: 'square', gain: 0.12 });
 }
 
+// ---------- Earcons 🔔 (señales sonoras: los pre-lectores no leen mensajes) ----------
+
+/** "Te escucho": blip agudo al apretar el micrófono. */
+export function earconListen() {
+  blip(1.6);
+}
+
+/** "No te entendí": dos tonos descendentes, amables (sin drama). */
+export function earconConfused() {
+  tone({ freq: 540, time: 0.16, type: 'sine', gain: 0.18 });
+  tone({ freq: 400, time: 0.24, type: 'sine', gain: 0.15, delay: 0.15 });
+}
+
+/** "El micrófono está bloqueado": doble tono grave. */
+export function earconBlocked() {
+  tone({ freq: 200, time: 0.18, type: 'square', gain: 0.1 });
+  tone({ freq: 165, time: 0.28, type: 'square', gain: 0.1, delay: 0.2 });
+}
+
 // ---------- Melodías por planeta 🎵 (procedurales, timbres y escalas propios) ----------
 const MELODIES = {
   sol:      { wave: 'triangle', vol: 0.10, notes: [[523, .3], [659, .3], [784, .3], [1047, .7]] },
@@ -213,18 +260,71 @@ if ('speechSynthesis' in window) {
 }
 
 /**
- * Habla en español con voz amable para niños.
- * Resuelve con true si habló, false si no pudo (para mostrar apoyo visual).
+ * Desbloquea la voz DENTRO del primer gesto del usuario. Chrome Android
+ * bloquea speechSynthesis.speak() si nunca hubo un speak dentro de un gesto;
+ * este "prime" silencioso (volumen 0) abre la puerta para toda la sesión.
+ * Idempotente: solo el primer toque hace trabajo.
+ * OJO: jamás cancel() justo antes del prime (mata la activación en algunos Android).
  */
-export function speak(text) {
+export function unlockSpeech() {
+  if (speechUnlocked) return;
+  speechUnlocked = true;
+  audioCtx();   // crea/despierta el AudioContext también dentro del gesto
+  if (!('speechSynthesis' in window)) { logEvent('unlock', { synth: false }); return; }
+  try {
+    speechSynthesis.resume();
+    const prime = new SpeechSynthesisUtterance(' ');
+    prime.volume = 0;
+    prime.rate = 2;
+    prime.lang = 'es-ES';
+    speechSynthesis.speak(prime);
+    if (spanishVoice === undefined) spanishVoice = findSpanishVoice(); // dispara la carga de voces
+    logEvent('unlock', { voices: speechSynthesis.getVoices().length });
+  } catch {
+    logEvent('unlock', { error: true });
+  }
+}
+
+/** Espera (con timeout) a que el navegador cargue la lista de voces. */
+function waitForVoices(timeoutMs = 1200) {
   return new Promise((resolve) => {
-    if (muted || !('speechSynthesis' in window)) return resolve(false);
-    // La voz NO lee emojis ni asteriscos (la burbuja muestra el original)
-    const clean = cleanForSpeech(text);
-    if (!clean) return resolve(false);
-    if (spanishVoice === undefined) spanishVoice = findSpanishVoice();
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    speechSynthesis.addEventListener?.('voiceschanged', finish, { once: true });
+    setTimeout(finish, timeoutMs);
+  });
+}
+
+/**
+ * Habla en español con voz amable para niños.
+ * Resuelve con true si habló DE VERDAD (llegó onstart), false si no pudo:
+ * silencio 🔇, motor mudo (onstart nunca llega), error o interrupción.
+ */
+export async function speak(text) {
+  if (muted || !('speechSynthesis' in window)) return false;
+  // La voz NO lee emojis ni asteriscos (la burbuja muestra el original)
+  const clean = cleanForSpeech(text);
+  if (!clean) return false;
+  const gen = speechGen;
+  // Primer speak con la lista de voces vacía: esperar voiceschanged un momento
+  // (una sola vez por sesión). La espera es COMPARTIDA: dos speaks concurrentes
+  // esperan la misma promesa (el segundo ya no se colaba sin voces).
+  if (!speechSynthesis.getVoices().length) {
+    if (!waitedForVoices) {
+      waitedForVoices = true;
+      voicesWait = waitForVoices().then(() => {
+        logEvent('voices', { count: speechSynthesis.getVoices().length });
+        voicesWait = null;
+      });
+    }
+    if (voicesWait) await voicesWait;
+  }
+  if (muted || gen !== speechGen) return false;   // nos interrumpieron mientras esperábamos
+  if (spanishVoice === undefined) spanishVoice = findSpanishVoice();
+  return new Promise((resolve) => {
     try {
       speechSynthesis.cancel();
+      speechSynthesis.resume();   // algunos Chrome quedan "pausados" y speak() no suena
       const u = new SpeechSynthesisUtterance(clean);
       u.lang = 'es-ES';
       if (spanishVoice) u.voice = spanishVoice;
@@ -232,11 +332,40 @@ export function speak(text) {
       u.rate = 0.85;    // más despacio para niños pequeños
       u.volume = 1;
       let done = false;
-      const finish = (ok) => { if (!done) { done = true; resolve(ok); } };
+      let started = false;
+      let startTimer = null;
+      let endTimer = null;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearTimeout(startTimer);
+        clearTimeout(endTimer);
+        resolve(ok);
+      };
+      // Detección de silencio REAL: si onstart no llega, el motor no está hablando
+      startTimer = setTimeout(() => {
+        logEvent('speak-fail', { reason: 'silent', len: clean.length });
+        try { speechSynthesis.cancel(); } catch { /* nada que cancelar */ }
+        finish(false);
+      }, 2500);
+      u.onstart = () => {
+        started = true;
+        clearTimeout(startTimer);
+        // Red de seguridad por si onend nunca llega (se arma desde el inicio real)
+        endTimer = setTimeout(() => finish(true), 1000 + clean.length * 120);
+      };
       u.onend = () => finish(true);
-      u.onerror = () => finish(false);
-      // Red de seguridad por si onend nunca llega
-      setTimeout(() => finish(true), 1000 + clean.length * 120);
+      u.onerror = (e) => {
+        // 'interrupted'/'canceled' = lo cortamos nosotros: no es fallo del motor.
+        // Tras onstart: sí habló. ANTES de onstart con la MISMA generación: otra
+        // frase del MISMO flujo nos relevó en el mismo tick (bravo → "¡Misión
+        // cumplida!", fin del tour) — tampoco es fallo (sin meneo falso del 🔊).
+        // El motor mudo DE VERDAD no pasa por aquí: no emite eventos y lo caza
+        // el watchdog de silencio de arriba (ese sí resuelve false → meneo).
+        const benign = e?.error === 'interrupted' || e?.error === 'canceled';
+        if (!benign) logEvent('speak-error', { error: e?.error ?? 'unknown' });
+        finish(benign && (started || gen === speechGen));
+      };
       speechSynthesis.speak(u);
     } catch {
       resolve(false);
@@ -246,4 +375,25 @@ export function speak(text) {
 
 export function stopSpeaking() {
   if ('speechSynthesis' in window) speechSynthesis.cancel();
+}
+
+/** Generación global de habla: subirla invalida narraciones y tours en curso. */
+export function getSpeechGen() { return speechGen; }
+
+/** boti.js registra aquí su <audio> de ElevenLabs para silenciarlo todo junto. */
+export function registerExternalAudio(el) { externalAudio = el; }
+
+/**
+ * Interrupción TOTAL e inmediata: invalida los speaks en curso (generación),
+ * corta la voz del navegador, la melodía del planeta y el mp3 de ElevenLabs.
+ * La llaman el micrófono 🎤, el 🔇 y las salidas de modo.
+ */
+export function interruptSpeech() {
+  speechGen++;
+  stopSpeaking();
+  stopMelody();
+  if (externalAudio) {
+    try { externalAudio.pause(); } catch { /* ya estaba parado */ }
+    externalAudio = null;
+  }
 }
