@@ -41,7 +41,10 @@ export function initSky({ speak, stopSpeech }) {
   let positions = [];
   let lastEphem = 0;
   let headingOffset = 0;          // calibración manual (corrige la brújula)
-  let haveHeading = false;        // ¿la orientación es absoluta (Norte real)?
+  let haveHeading = false;        // ¿el Norte es confiable (absoluto/calibrado)?
+  let absoluteSeen = false;       // ya llegó una orientación ABSOLUTA (manda sobre la relativa)
+  let gotOrient = false;          // llegó al menos un evento de orientación
+  let orientWatchdog = null;      // avisa si el aparato no manda sensores
   let lastOrient = null;          // {az, alt} crudo del sensor
   let raf = 0;
   let announcedId = null;
@@ -114,12 +117,25 @@ export function initSky({ speak, stopSpeech }) {
   function onOrient(e) {
     let alpha = e.alpha, beta = e.beta, gamma = e.gamma;
     if (alpha == null || beta == null || gamma == null) return;
-    if (typeof e.webkitCompassHeading === 'number') {       // iOS: brújula real
+    const isWebkit = typeof e.webkitCompassHeading === 'number';
+    const isAbs = isWebkit || e.absolute === true;
+    // Prioridad de fuente: Android dispara 'deviceorientationabsolute' Y
+    // 'deviceorientation' (relativo). Una vez que tenemos Norte absoluto,
+    // ignoramos el relativo: si no, pisaría el Norte y la brújula saltaría.
+    if (absoluteSeen && !isAbs) return;
+    if (isWebkit) {
       alpha = 360 - e.webkitCompassHeading;                 // heading horario -> alpha antihorario
-      haveHeading = true;
+      const acc = e.webkitCompassAccuracy;
+      if (typeof acc === 'number' && (acc < 0 || acc > 30)) {
+        haveHeading = false;                                 // iOS sin calibrar: Norte no confiable -> pide calibrar
+      } else {
+        haveHeading = true; absoluteSeen = true;
+      }
     } else if (e.absolute === true) {
-      haveHeading = true;                                    // 'deviceorientationabsolute' ya es Norte real
+      haveHeading = true; absoluteSeen = true;               // ya es Norte real
     }
+    gotOrient = true;
+    clearTimeout(orientWatchdog);
     lastOrient = lookDir(alpha, beta, gamma);
   }
 
@@ -224,6 +240,9 @@ export function initSky({ speak, stopSpeech }) {
     if (active) return;
     if (!built) build();
     active = true;
+    // Estado fresco en cada apertura
+    absoluteSeen = false; gotOrient = false; haveHeading = false;
+    headingOffset = 0; lastOrient = null; announcedId = null;
     overlay.classList.remove('hidden');
     hint.textContent = 'Pidiendo permiso para la brújula…';
 
@@ -233,6 +252,16 @@ export function initSky({ speak, stopSpeech }) {
       speak?.('Este aparato no me deja ver hacia dónde apuntas. ¡Pero podemos explorar el universo con los otros botones! 🚀');
       return;
     }
+    // Watchdog: si el aparato NO manda orientación (compu, navegador sin
+    // sensores, permiso a medias), avisamos en vez de quedar mudos.
+    clearTimeout(orientWatchdog);
+    orientWatchdog = setTimeout(() => {
+      if (!gotOrient && active) {
+        hint.textContent = 'No recibo la brújula de este aparato. Mueve el celular en el aire; si nada cambia, quizás no tiene sensores. Igual puedes explorar con los otros botones. 🚀';
+        speak?.('Mmm, no siento el movimiento de este aparato. ¡Muévelo un poquito, o usa los otros botones para explorar el universo! 🚀');
+      }
+    }, 3500);
+
     coords = await getLocation();
     refreshEphemeris();
     speak?.('¡Apunta el celular al cielo y muévelo despacito! Te digo qué estrella o planeta estás mirando. Si está corrido, apunta al Sol o la Luna y toca la brújula. 🔭');
@@ -244,6 +273,7 @@ export function initSky({ speak, stopSpeech }) {
     if (!active) return;
     active = false;
     cancelAnimationFrame(raf);
+    clearTimeout(orientWatchdog);
     window.removeEventListener('deviceorientationabsolute', onOrient, true);
     window.removeEventListener('deviceorientation', onOrient, true);
     overlay.classList.add('hidden');

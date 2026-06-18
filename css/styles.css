@@ -419,9 +419,26 @@ html, body {
    que el micrófono tapaba el 🏠 e interceptaba sus toques. Boti y su mic suben
    a una segunda fila sobre la barra (el cajón 🎮 queda a su derecha sin chocar).
    En >1100px y en móviles (≤740px) nada cambia. */
-@media (max-width: 1100px) and (min-width: 741px) {
+@media (max-width: 1100px) {
   #boti-hud { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 100px); }
   #boti-type { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 320px); }
+}
+
+/* Teléfonos angostos: la botonera (8 botones) no entra en una fila → se
+   encoge para que TODOS quepan en pantalla (Home y Sonido dejaban de verse).
+   El robot+mic ya subieron a su fila propia con la regla de arriba. El mic y
+   los botones flotantes (❓ 🔭) NO se tocan (solo #toolbar/#games-row). */
+@media (max-width: 480px) {
+  #toolbar, #games-row { gap: 5px; padding: 8px 9px; max-width: 100vw; }
+  #toolbar .big-btn, #games-row .big-btn {
+    width: 44px; height: 44px; min-width: 44px; min-height: 44px; font-size: 1.4rem;
+  }
+}
+@media (max-width: 380px) {
+  #toolbar, #games-row { gap: 3px; padding: 6px 6px; }
+  #toolbar .big-btn, #games-row .big-btn {
+    width: 40px; height: 40px; min-width: 40px; min-height: 40px; font-size: 1.25rem;
+  }
 }
 
 #boti {
