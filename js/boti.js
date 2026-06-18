@@ -5,19 +5,21 @@
 // - Respuestas: backend /api/ask (Claude) → fallback banco local de ~30 preguntas
 // - Voz: backend /api/tts (ElevenLabs) → fallback speechSynthesis del navegador
 import * as audio from './audio.js';
+import { PLANETS, STORIES, STICKERS } from './planets.js';
 
 const PROFILES_KEY = 'mi-universo-perfiles-v1';
 const STICKERS_KEY = 'mi-universo-stickers-v1';
 const QUIZ_KEY = 'mi-universo-quiz-v1';
+const HELP_SEEN_KEY = 'mi-universo-help-seen-v1';
 
 const AVATARS = ['🦁', '🦄', '🐸', '🚀', '👧', '👦', '🐱', '🐶'];
-const AGES = [3, 4, 5, 6];
+const AGES = [3, 4, 5, 6, 7, 8, 9, 10];
 
 // ---------- Banco local de preguntas frecuentes (sin backend) ----------
 // keys: palabras (sin tildes, minúsculas) que activan la respuesta.
 const LOCAL_BANK = [
   { keys: ['luna'], a: 'La Luna es la mejor amiga de la Tierra. ¡Baila a su alrededor y de noche nos alumbra! 🌙' },
-  { keys: ['sol'], a: 'El Sol es una estrella gigante y calentita. ¡Nos da luz y calor a todos! ☀️' },
+  { keys: ['sol'], a: 'El Sol es una estrella gigante de fuego. ¡Su superficie está a unos 5.500 grados, más caliente que mil hornos juntos! Por eso nos da luz y calor a todos. ☀️' },
   { keys: ['estrella fugaz', 'fugaz'], a: 'Una estrella fugaz es una piedrita del espacio que se enciende al caer. ¡Pide un deseo cuando veas una! 🌠' },
   { keys: ['estrella'], a: 'Las estrellas son soles lejísimos, como lucecitas en el cielo. ¡Hay más estrellas que granitos de arena! ⭐' },
   { keys: ['marte'], a: 'Marte es el planeta rojo, rojo como una manzana. ¡Los robots lo visitan para explorarlo! 🔴' },
@@ -47,7 +49,7 @@ const LOCAL_BANK = [
   { keys: ['nube'], a: 'En el espacio hay nubes gigantes de colores que se llaman nebulosas. ¡Allí nacen las estrellas bebés! ☁️✨' },
   { keys: ['cuantos', 'cuantas'], a: '¡Hay ocho planetas en nuestro sistema solar! Y estrellas... ¡más que granitos de arena en la playa! 🌟' },
 ];
-const LOCAL_FALLBACK = '¡Esa es una pregunta súper difícil! ¡Preguntemos a un astrónomo! Pero si quieres, pregúntame por la Luna, los cohetes o los planetas. 🔭';
+const LOCAL_FALLBACK = '¡Qué buena pregunta del espacio! Pregúntame por el Sol, la Luna, los planetas, los cometas o las estrellas y te cuento todo lo que sé. 🔭';
 const OFFTOPIC_HINTS = ['¡Yo solo sé de estrellas y planetas! ¿Me preguntas algo del espacio? 🚀'];
 
 function normalize(s) {
@@ -60,6 +62,29 @@ function localAnswer(question) {
     if (entry.keys.some((k) => q.includes(normalize(k)))) return entry.a;
   }
   return LOCAL_FALLBACK;
+}
+
+// ---------- Cuentos 📖 ----------
+// Intent de cuento sobre la pregunta YA normalizada (sin tildes, minúsculas).
+const STORY_INTENT = /\b(cuento|cu[eé]ntame|historia)\b/i;
+
+// Intent de ayuda 🆘: "ayuda", "cómo se juega", "qué hago", "no sé jugar".
+// Se evalúa sobre la pregunta normalizada (sin tildes), antes de gastar el LLM.
+const HELP_INTENT = /\b(ayuda|ayudame|como se juega|como juego|como jugar|que hago|no se jugar)\b/i;
+
+/** Cuento local (sin LLM): el del planeta mencionado en la pregunta o uno al azar. */
+function localStory(question) {
+  const q = ' ' + normalize(question) + ' ';
+  const ids = Object.keys(STORIES);
+  const id = ids.find((k) => new RegExp(`\\b${k}\\b`).test(q))
+    ?? ids[(Math.random() * ids.length) | 0];
+  return STORIES[id];
+}
+
+// Nombre hablable del lugar para armar la pregunta del botón 📖
+const STORY_PLACE_NAMES = { sol: 'el Sol', luna: 'la Luna' };
+function storyPlaceName(id) {
+  return STORY_PLACE_NAMES[id] ?? PLANETS.find((pl) => pl.id === id)?.name ?? id;
 }
 
 // ---------- Perfiles ----------
@@ -83,6 +108,7 @@ export function initBoti() {
   let listening = false;
   let recognition = null;
   let currentAudio = null;
+  let helpHandler = null;   // lo inyecta main.js: lanza el recorrido del modo ayuda ❓
 
   // Desbloqueo de la voz en el PRIMER gesto (bienvenida, mic, canvas, lo que
   // sea): Chrome Android exige un speak dentro de un gesto del usuario o Boti
@@ -121,10 +147,109 @@ export function initBoti() {
     if (!p) return;
     p.stickers = readJSON(STICKERS_KEY, []);
     p.quiz = readJSON(QUIZ_KEY, { level: 0 });
+    recordDailyProgress(p);   // foto diaria para el modo padres 📈
     saveProfiles(profiles);
   }
   setInterval(snapshotProfile, 8000);
   window.addEventListener('beforeunload', snapshotProfile);
+
+  // ---------- memoria de visitas por perfil 💙 ----------
+  // Campo ADITIVO p.visits = { id: { n, last: 'YYYY-MM-DD' } } dentro del
+  // perfil (misma clave de siempre). Los perfiles viejos no lo tienen: se crea
+  // en el primer recordVisit. snapshotProfile/applyProfile no lo tocan, así
+  // que sobrevive a los snapshots periódicos sin migración alguna.
+  const VISIT_IDS = new Set(['sol', 'luna', ...PLANETS.map((pl) => pl.id)]);
+
+  /** Apunta una visita narrada completa (solo Sol, Luna y los 8 planetas). */
+  function recordVisit(defId) {
+    if (!VISIT_IDS.has(defId)) return;
+    const p = activeProfile();
+    if (!p) return;
+    if (!p.visits) p.visits = {};
+    const rec = p.visits[defId] ?? { n: 0, last: '' };
+    rec.n += 1;
+    rec.last = new Date().toISOString().slice(0, 10);
+    p.visits[defId] = rec;
+    saveProfiles(profiles);
+  }
+
+  /** Planeta favorito: el más visitado (n ≥ 2) entre los 8 planetas, o null. */
+  function getFavorite() {
+    const visits = activeProfile()?.visits;
+    if (!visits) return null;
+    let best = null;
+    for (const pl of PLANETS) {
+      const rec = visits[pl.id];
+      if (rec?.n >= 2 && (!best || rec.n > best.n)) best = { id: pl.id, name: pl.name, n: rec.n };
+    }
+    return best;
+  }
+
+  /** Lista de perfiles (la usará el quiz de 2 jugadores 👫). */
+  function getProfiles() {
+    return { list: profiles?.list ?? [], activeIdx: profiles?.activeIdx ?? 0 };
+  }
+
+  /** Último lugar visitado que tiene cuento (por fecha `last` de p.visits). */
+  function lastVisitedStoryId() {
+    const visits = activeProfile()?.visits;
+    if (!visits) return null;
+    let best = null;
+    for (const [id, rec] of Object.entries(visits)) {
+      if (STORIES[id] && rec?.last && (!best || rec.last > best.last)) best = { id, last: rec.last };
+    }
+    return best?.id ?? null;
+  }
+
+  // ---------- historial para el modo padres 👨‍👩‍👧 ----------
+  // Campo ADITIVO p.questions = [{q, src: 'llm'|'banco'|'guard', t}] (cap 50).
+  // 100% local: vive en el perfil (localStorage), jamás viaja al servidor.
+  function recordQuestion(q, src) {
+    const p = activeProfile();
+    if (!p) return;
+    if (!Array.isArray(p.questions)) p.questions = [];
+    p.questions.push({ q: String(q).slice(0, 300), src, t: Date.now() });
+    while (p.questions.length > 50) p.questions.shift();
+    saveProfiles(profiles);
+  }
+
+  // ---------- métricas y mejora para el modo padres 📊📈 ----------
+  // Todo se deriva de campos que el juego YA guarda (visits, stickers, quiz,
+  // questions): no se rastrea nada nuevo, solo se resume.
+  function profileMetrics(p) {
+    const visits = p?.visits ?? {};
+    const visitedIds = [...VISIT_IDS].filter((id) => (visits[id]?.n ?? 0) > 0);
+    let last = '';
+    for (const id of visitedIds) { if ((visits[id]?.last ?? '') > last) last = visits[id].last; }
+    const qs = Array.isArray(p?.questions) ? p.questions : [];
+    if (qs.length) {
+      const lastQ = new Date(qs[qs.length - 1].t).toISOString().slice(0, 10);
+      if (lastQ > last) last = lastQ;
+    }
+    return {
+      visitedIds,
+      planets: visitedIds.length,
+      stickers: Array.isArray(p?.stickers) ? p.stickers.length : 0,
+      quizLevel: p?.quiz?.level ?? 0,
+      questions: qs.length,
+      last,
+    };
+  }
+
+  // Foto diaria ADITIVA p.history = [{d:'YYYY-MM-DD', p, s, l, q}] (cap 60).
+  // Upsert de la entrada de HOY (la última lectura del día manda). Con los días
+  // se forma la serie que muestra la mejora 📈. No guarda: lo hace snapshotProfile.
+  function recordDailyProgress(p) {
+    if (!p) return;
+    const m = profileMetrics(p);
+    const d = new Date().toISOString().slice(0, 10);
+    if (!Array.isArray(p.history)) p.history = [];
+    const row = { d, p: m.planets, s: m.stickers, l: m.quizLevel, q: m.questions };
+    const today = p.history.find((e) => e.d === d);
+    if (today) Object.assign(today, row);
+    else p.history.push(row);
+    while (p.history.length > 60) p.history.shift();
+  }
 
   // ---------- voz de Boti ----------
   // Si ElevenLabs falla (clave sin permiso, red, etc.) caemos a la voz del
@@ -234,21 +359,39 @@ export function initBoti() {
   async function askBoti(question) {
     if (!question || !question.trim()) return;
     const p = activeProfile();
+    // Ayuda 🆘: si el niño pide ayuda, Boti lanza el recorrido guiado (no gasta
+    // LLM ni banco). Solo si main.js inyectó el handler; si no, sigue de largo.
+    if (helpHandler && HELP_INTENT.test(normalize(question))) {
+      recordQuestion(question, 'guard');   // queda en el historial del modo padres
+      helpHandler();
+      return;
+    }
+    // Cuentos 📖: el intent se detecta sobre la pregunta normalizada
+    const wantsStory = STORY_INTENT.test(normalize(question));
     setThinking(true);
     let answer = null;
+    let src = 'banco';            // fuente para el modo padres: llm | banco | guard
     if (capabilities.llm) {
       try {
+        // favorite va con whitelist en el server (solo ids de planeta válidos)
+        const body = { question, name: p?.name, age: p?.age, favorite: getFavorite()?.id };
+        if (wantsStory) body.story = true;   // el server valida story === true
         const r = await fetch('api/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question, name: p?.name, age: p?.age }),
+          body: JSON.stringify(body),
         });
         const data = await r.json().catch(() => null);
-        if (data?.ok && data.text) answer = data.text;
-        else if (data?.text) answer = data.text;     // enlatada (rate limit, error)
+        if (data?.ok && data.text) {
+          answer = data.text;
+          src = data.source === 'guard' ? 'guard' : 'llm';
+        } else if (data?.text) {
+          answer = data.text;     // enlatada (rate limit, error): no fue el LLM
+        }
       } catch { /* backend caído → banco local */ }
     }
-    if (!answer) answer = localAnswer(question);
+    if (!answer) answer = wantsStory ? localStory(question) : localAnswer(question);
+    recordQuestion(question, src);   // historial local del modo padres 👨‍👩‍👧
     setThinking(false);
     await botiSpeak(answer);
   }
@@ -267,6 +410,7 @@ export function initBoti() {
       </div>
     </div>
     <button id="btn-mic" class="big-btn" data-tip="Habla con Boti" aria-label="Mantén apretado para hablar con Boti">🎤</button>
+    <button id="btn-story" class="mini-btn" data-tip="Un cuento" aria-label="Boti te cuenta un cuento">📖</button>
   `;
   document.body.appendChild(hud);
 
@@ -511,6 +655,16 @@ export function initBoti() {
       $('boti-type-input').focus();
     });
   }
+  // ---------- botón 📖: un cuento del último planeta visitado (o al azar) ----------
+  // Con LLM la pregunta armada lleva el lugar y dispara story:true en askBoti;
+  // sin LLM, localStory elige el cuento pre-escrito de ese mismo lugar.
+  $('btn-story').addEventListener('click', () => {
+    audio.blip(1.3);
+    const ids = Object.keys(STORIES);
+    const id = lastVisitedStoryId() ?? ids[(Math.random() * ids.length) | 0];
+    askBoti(`Cuéntame un cuento de ${storyPlaceName(id)}`);
+  });
+
   const sendTyped = () => {
     const input = $('boti-type-input');
     const q = input.value.trim();
@@ -546,6 +700,191 @@ export function initBoti() {
       ? 'Hablo con mi voz especial.'
       : 'Hablo con la voz del aparato.';
     botiSpeak(`${micMsg} ${brainMsg} ${voiceMsg}`);
+  }
+
+  // ---------- modo padres 👨‍👩‍👧 (overlay 100% local) ----------
+  // Acceso a propósito "escondido" de los niños: long-press de 2 s en el chip
+  // 🧠 del panel 🎨 (el long-press de Boti, 700 ms, es otro elemento y sigue
+  // igual). Texto pequeño OK: esto es territorio adulto.
+  const parentPanel = document.createElement('div');
+  parentPanel.id = 'parent-panel';
+  parentPanel.className = 'hidden';
+  document.body.appendChild(parentPanel);
+
+  const SRC_ICONS = {
+    llm: { icon: '🧠✨', label: 'Respondió la inteligencia artificial' },
+    banco: { icon: '📚', label: 'Respondió el banco local de respuestas' },
+    guard: { icon: '🛡️', label: 'Pregunta filtrada por los guardarraíles' },
+  };
+
+  /** '12/06 17:42' a partir del timestamp del historial. */
+  function fmtWhen(t) {
+    const d = new Date(t);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  const BODY_NAMES = { sol: 'Sol', luna: 'Luna' };
+  function bodyName(id) {
+    return BODY_NAMES[id] ?? PLANETS.find((pl) => pl.id === id)?.name ?? id;
+  }
+  /** 'YYYY-MM-DD' → '12/06' (o '' si vacío). */
+  function fmtDay(iso) {
+    const [, m, d] = String(iso ?? '').split('-');
+    return (m && d) ? `${d}/${m}` : '';
+  }
+
+  /** Texto de mejora a partir de la foto diaria p.history. */
+  function trendText(p) {
+    const hist = Array.isArray(p.history) ? p.history : [];
+    if (hist.length < 2) return '¡Primer día registrado! Vuelve mañana para ver la mejora. 🌱';
+    const latest = hist[hist.length - 1];
+    const cutoff = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    let ref = hist.find((e) => e.d >= cutoff) ?? hist[0];
+    if (ref.d === latest.d) ref = hist[hist.length - 2];   // solo hoy en la ventana: compara con la lectura previa
+    const dp = latest.p - ref.p, ds = latest.s - ref.s, dl = latest.l - ref.l;
+    if (dp <= 0 && ds <= 0 && dl <= 0) return `Mismo progreso que el ${fmtDay(ref.d)}. ¡A explorar más! 🚀`;
+    const bits = [];
+    if (dl > 0) bits.push(`subió ${dl} nivel${dl > 1 ? 'es' : ''} de quiz`);
+    if (ds > 0) bits.push(`ganó ${ds} pegatina${ds > 1 ? 's' : ''}`);
+    if (dp > 0) bits.push(`visitó ${dp} cuerpo${dp > 1 ? 's' : ''} nuevo${dp > 1 ? 's' : ''}`);
+    return `Desde el ${fmtDay(ref.d)}: ${bits.join(', ')}. ¡Va mejorando!`;
+  }
+
+  /** Bloque "boletín": progreso del juego por perfil (planetas, pegatinas, nivel…). */
+  function appendBulletin(box, p) {
+    const m = profileMetrics(p);
+    const stats = document.createElement('div');
+    stats.className = 'pp-stats';
+    const rows = [
+      ['🪐', `Planetas visitados: ${m.planets}/${VISIT_IDS.size}`, m.visitedIds.map(bodyName).join(', ')],
+      ['⭐', `Pegatinas: ${m.stickers}/${STICKERS.length}`, ''],
+      ['🏆', `Nivel de quiz: ${m.quizLevel}`, ''],
+      ['❓', `Preguntas hechas: ${m.questions}`, ''],
+      ['🗓️', `Última vez que jugó: ${fmtDay(m.last) || '—'}`, ''],
+    ];
+    for (const [icon, label, sub] of rows) {
+      const row = document.createElement('div');
+      row.className = 'pp-stat';
+      const ic = document.createElement('span');
+      ic.className = 'pp-stat-icon';
+      ic.textContent = icon;
+      const tx = document.createElement('span');
+      tx.className = 'pp-stat-text';
+      tx.textContent = sub ? `${label} — ${sub}` : label;
+      row.append(ic, tx);
+      stats.appendChild(row);
+    }
+    box.appendChild(stats);
+    const trend = document.createElement('p');
+    trend.className = 'pp-trend';
+    trend.textContent = `📈 ${trendText(p)}`;
+    box.appendChild(trend);
+  }
+
+  // Construcción 100% por DOM (textContent): las preguntas son texto del niño
+  // o del reconocedor de voz y JAMÁS deben interpretarse como HTML.
+  function renderParentPanel() {
+    parentPanel.innerHTML = '';
+    const title = document.createElement('p');
+    title.className = 'pp-title';
+    title.textContent = '👨‍👩‍👧 Modo padres — preguntas a Boti (solo en este aparato)';
+    parentPanel.appendChild(title);
+    for (const p of profiles?.list ?? []) {
+      const box = document.createElement('div');
+      box.className = 'pp-profile';
+      const head = document.createElement('div');
+      head.className = 'pp-head';
+      const who = document.createElement('span');
+      who.className = 'pp-who';
+      who.textContent = `${p.avatar ?? '🧑‍🚀'} ${p.name ?? ''}`;
+      const del = document.createElement('button');
+      del.className = 'pp-del';
+      del.textContent = '🗑️';
+      del.setAttribute('aria-label', `Borrar el historial de ${p.name ?? 'este perfil'}`);
+      del.addEventListener('click', () => {
+        p.questions = [];
+        saveProfiles(profiles);
+        renderParentPanel();
+      });
+      head.append(who, del);
+      box.appendChild(head);
+      appendBulletin(box, p);   // boletín de progreso + mejora 📊📈
+      const sub = document.createElement('p');
+      sub.className = 'pp-subhead';
+      sub.textContent = '❓ Preguntas a Boti:';
+      box.appendChild(sub);
+      const qs = Array.isArray(p.questions) ? [...p.questions].reverse() : [];
+      if (!qs.length) {
+        const empty = document.createElement('p');
+        empty.className = 'pp-empty';
+        empty.textContent = 'Sin preguntas todavía.';
+        box.appendChild(empty);
+      }
+      for (const item of qs) {
+        const row = document.createElement('div');
+        row.className = 'pp-q';
+        const srcInfo = SRC_ICONS[item.src] ?? SRC_ICONS.banco;
+        const icon = document.createElement('span');
+        icon.className = 'pp-src';
+        icon.textContent = srcInfo.icon;
+        icon.title = srcInfo.label;
+        icon.setAttribute('aria-label', srcInfo.label);
+        const txt = document.createElement('span');
+        txt.className = 'pp-text';
+        txt.textContent = item.q ?? '';
+        const when = document.createElement('span');
+        when.className = 'pp-when';
+        when.textContent = fmtWhen(item.t);
+        row.append(icon, txt, when);
+        box.appendChild(row);
+      }
+      parentPanel.appendChild(box);
+    }
+    const print = document.createElement('button');
+    print.id = 'parent-print';
+    print.className = 'big-btn';
+    print.textContent = '🖨️';
+    print.dataset.tip = 'Imprimir reporte';
+    print.setAttribute('aria-label', 'Imprimir el reporte de progreso');
+    print.addEventListener('click', () => {
+      // Reusa window.print(): la clase en <body> hace que @media print muestre
+      // SOLO el panel de padres y oculte el resto (canvas, HUD, botones).
+      document.body.classList.add('printing-parents');
+      const cleanup = () => {
+        document.body.classList.remove('printing-parents');
+        window.removeEventListener('afterprint', cleanup);
+      };
+      window.addEventListener('afterprint', cleanup);
+      window.print();
+    });
+    parentPanel.appendChild(print);
+
+    const close = document.createElement('button');
+    close.id = 'parent-close';
+    close.className = 'big-btn';
+    close.textContent = '❌';
+    close.dataset.tip = 'Cerrar';
+    close.setAttribute('aria-label', 'Cerrar el modo padres');
+    close.addEventListener('click', () => parentPanel.classList.add('hidden'));
+    parentPanel.appendChild(close);
+  }
+
+  // Long-press de 2000 ms en el chip 🧠 (#chip-brain) del panel 🎨
+  const brainChip = $('chip-brain');
+  if (brainChip) {
+    let ppTimer = null;
+    const arm = () => {
+      clearTimeout(ppTimer);
+      ppTimer = setTimeout(() => {
+        renderParentPanel();
+        parentPanel.classList.remove('hidden');
+      }, 2000);
+    };
+    const disarm = () => clearTimeout(ppTimer);
+    brainChip.addEventListener('pointerdown', arm);
+    brainChip.addEventListener('pointerup', disarm);
+    brainChip.addEventListener('pointerleave', disarm);
   }
 
   // ---------- pantalla de bienvenida ----------
@@ -599,7 +938,15 @@ export function initBoti() {
       applyProfile(profiles.list.length - 1);
       closeWelcome();
       audio.twinkle();
-      botiSpeak(`¡Hola ${name}! Soy Boti Bot, tu amigo del espacio. Mantén apretado el botón del micrófono y pregúntame lo que quieras sobre el universo.`);
+      // 1ª vez en el aparato: Boti saluda y GUÍA el recorrido (se marca el flag
+      // para no repetirlo). Las veces siguientes (o si no hay handler), saludo normal.
+      const firstEver = readJSON(HELP_SEEN_KEY, false) !== true;
+      if (helpHandler && firstEver) {
+        writeJSON(HELP_SEEN_KEY, true);
+        helpHandler();
+      } else {
+        botiSpeak(`¡Hola ${name}! Soy Boti Bot, tu amigo del espacio. Mantén apretado el botón del micrófono y pregúntame lo que quieras sobre el universo.`);
+      }
     });
   }
 
@@ -621,7 +968,11 @@ export function initBoti() {
         applyProfile(parseInt(b.dataset.idx, 10));
         closeWelcome();
         audio.twinkle();
-        botiSpeak(`¡Hola otra vez, ${activeProfile().name}! ¡Qué bueno verte! ¿Exploramos el universo?`);
+        // Si ya tiene un planeta favorito (2+ visitas), Boti lo recuerda 💙
+        const fav = getFavorite();
+        botiSpeak(fav
+          ? `¡Hola otra vez, ${activeProfile().name}! ¿Volvemos a ${fav.name}? ¡Es tu favorito!`
+          : `¡Hola otra vez, ${activeProfile().name}! ¡Qué bueno verte! ¿Exploramos el universo?`);
       });
     });
     welcome.querySelector('#profile-new').addEventListener('click', renderCreateForm);
@@ -658,5 +1009,10 @@ export function initBoti() {
     ask: askBoti,
     getProfile: activeProfile,
     getStatus,
+    recordVisit,
+    getFavorite,
+    getProfiles,
+    /** main.js inyecta el lanzador del modo ayuda ❓ (recorrido guiado). */
+    setHelpHandler(fn) { helpHandler = typeof fn === 'function' ? fn : null; },
   };
 }

@@ -407,6 +407,21 @@ export function createGlowTexture(inner = 'rgba(255,230,150,1)', outer = 'rgba(2
   return asTexture(canvas);
 }
 
+/** Mancha de sombra para eclipses 🌚: umbra oscura + penumbra suave. */
+export function createShadowSpotTexture() {
+  const s = 128;
+  const canvas = makeCanvas(s, s);
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, 'rgba(0,0,0,0.92)');     // umbra: casi negra
+  g.addColorStop(0.45, 'rgba(0,0,0,0.8)');
+  g.addColorStop(0.7, 'rgba(0,0,0,0.35)');   // penumbra
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
+  return new THREE.CanvasTexture(canvas);
+}
+
 /** Punto blanco suave para estrellas/partículas. */
 export function createDotTexture() {
   const s = 64;

@@ -39,6 +39,19 @@
     <div id="card-mouth" class="card-mouth"></div>
   </div>
 
+  <!-- Fase de la Luna en grande (modo fases 🌗): solo emoji, sin texto -->
+  <div id="phase-overlay" class="hidden" aria-hidden="true">
+    <span id="phase-emoji">🌕</span>
+  </div>
+
+  <!-- Botón flotante de eclipses (solo visible durante el modo fases) -->
+  <button id="btn-eclipse" class="big-btn hidden" data-tip="¿Y si se alinean?"
+          aria-label="Ver los eclipses: el Sol, la Luna y la Tierra en fila">🌞🌚</button>
+
+  <!-- Botón flotante de escala real (solo visible con 📏 comparar activo) -->
+  <button id="btn-scale" class="big-btn hidden" data-tip="¿Y las distancias de verdad?"
+          aria-label="Ver las distancias de verdad entre los planetas">🏔</button>
+
   <!-- Botones grandes solo con iconos -->
   <nav id="toolbar" aria-label="Controles">
     <button id="btn-home"   class="big-btn" data-tip="Inicio" aria-label="Ver todo el universo">🏠</button>
@@ -55,9 +68,25 @@
   <nav id="games-row" class="hidden" aria-label="Juegos">
     <button id="btn-quiz"  class="big-btn" data-tip="Quiz" aria-label="Juego de adivinar planetas">🎯</button>
     <button id="btn-levels" class="big-btn" data-tip="Niveles" aria-label="Quiz con niveles">🏆</button>
+    <button id="btn-gravity" class="big-btn" data-tip="Salta la pelota" aria-label="Juego de la pelota que bota en cada planeta">🏀</button>
+    <button id="btn-duo" class="big-btn" data-tip="Quiz de a dos" aria-label="Quiz para dos jugadores">👫</button>
     <button id="btn-album" class="big-btn" data-tip="Álbum" aria-label="Álbum de pegatinas">📒</button>
     <button id="btn-build" class="big-btn" data-tip="Crea tu planeta" aria-label="Construye tu planeta">🪐</button>
   </nav>
+
+  <!-- Elegir jugadores del quiz de a dos 👫 (reusa estilos de la bienvenida) -->
+  <div id="duo-picker" class="hidden" aria-label="Elige con quién juegas">
+    <p class="welcome-title">¿Quién juega contigo? 👫</p>
+    <div id="duo-list" class="welcome-profiles"></div>
+    <button id="duo-close" class="big-btn duo-close" data-tip="Cerrar" aria-label="Cerrar">❌</button>
+  </div>
+
+  <!-- Banner de turno del quiz de a dos (avatar grande + nombre) -->
+  <div id="turn-banner" class="hidden" aria-live="polite">
+    <span id="turn-avatar">🧑‍🚀</span>
+    <span id="turn-name">…</span>
+    <span class="turn-label">¡Te toca!</span>
+  </div>
 
   <!-- Panel de personalización (solo iconos) -->
   <div id="style-panel" class="hidden side-panel" aria-label="Personalizar">
@@ -121,7 +150,16 @@
   <!-- Álbum de pegatinas 📒 -->
   <div id="album" class="hidden" aria-label="Álbum de pegatinas">
     <div id="album-grid"></div>
-    <button id="album-close" class="big-btn album-close" data-tip="Cerrar" aria-label="Cerrar álbum">❌</button>
+    <div class="album-actions">
+      <button id="btn-print" class="big-btn" data-tip="Mi pasaporte" aria-label="Imprimir mi pasaporte espacial">🖨️</button>
+      <button id="album-close" class="big-btn album-close" data-tip="Cerrar" aria-label="Cerrar álbum">❌</button>
+    </div>
+  </div>
+
+  <!-- Pasaporte espacial 🖨️ (pantalla: overlay; papel: página A4 vía @media print) -->
+  <div id="passport" class="hidden" aria-label="Pasaporte espacial">
+    <div id="passport-page"></div>
+    <button id="passport-close" class="big-btn passport-close" data-tip="Cerrar" aria-label="Cerrar pasaporte">❌</button>
   </div>
 
   <!-- Pegatina nueva (animación de desbloqueo) -->

@@ -1,5 +1,5 @@
 // ====== Interfaz para pre-lectores: botones grandes con emojis ======
-import { TEMP_EMOJI, STICKERS } from './planets.js';
+import { TEMP_EMOJI, STICKERS, SUN, PLANETS } from './planets.js';
 
 const STORAGE_KEY = 'mi-universo-settings-v1';
 const STICKERS_KEY = 'mi-universo-stickers-v1';
@@ -41,8 +41,9 @@ export function saveMission(m) { saveJSON(MISSION_KEY, m); }
 
 /**
  * Conecta la interfaz. `handlers`:
- * onHome, onGalaxy, onTour, onCompare, onQuiz, onLevels, onBuildCreate(cfg),
- * onBuildDelete, onSoundToggle, onPauseToggle, onSettingChange(key, value)
+ * onHome, onGalaxy, onEclipse, onScale, onTour, onCompare, onQuiz, onLevels,
+ * onGravity, onDuo, onBuildCreate(cfg), onBuildDelete, onSoundToggle,
+ * onPauseToggle, onSettingChange(key, value)
  */
 export function initUI(settings, handlers) {
   const $ = (id) => document.getElementById(id);
@@ -80,6 +81,12 @@ export function initUI(settings, handlers) {
   $('btn-tour').addEventListener('click', () => { closeAllPanels(); handlers.onTour(); });
   $('btn-compare').addEventListener('click', () => { closeAllPanels(); handlers.onCompare(); });
 
+  // Botón flotante de eclipses 🌞🌚 (solo visible durante el modo fases 🌗)
+  $('btn-eclipse').addEventListener('click', () => { closeAllPanels(); handlers.onEclipse(); });
+
+  // Botón flotante de escala real 🏔 (solo visible con 📏 comparar o ya en escala)
+  $('btn-scale').addEventListener('click', () => { closeAllPanels(); handlers.onScale(); });
+
   $('btn-games').addEventListener('click', () => {
     const open = panels.games.classList.contains('hidden');
     closeAllPanels();
@@ -91,6 +98,9 @@ export function initUI(settings, handlers) {
 
   $('btn-quiz').addEventListener('click', () => { closeAllPanels(); handlers.onQuiz(); });
   $('btn-levels').addEventListener('click', () => { closeAllPanels(); handlers.onLevels(); });
+  $('btn-gravity').addEventListener('click', () => { closeAllPanels(); handlers.onGravity(); });
+  $('btn-duo').addEventListener('click', () => { closeAllPanels(); handlers.onDuo(); });
+  $('duo-close').addEventListener('click', () => $('duo-picker').classList.add('hidden'));
   $('btn-album').addEventListener('click', () => { closeAllPanels(); showAlbum(); });
   $('btn-build').addEventListener('click', (e) => {
     panels.games.classList.add('hidden');
@@ -244,8 +254,27 @@ export function initUI(settings, handlers) {
 
   function showAlbum() {
     renderAlbum();
+    // El pasaporte se pre-renderiza: un Ctrl+P directo también imprime algo digno
+    renderPassport(handlers.getProfile?.() ?? null);
     $('album').classList.remove('hidden');
   }
+
+  // --- Pasaporte espacial 🖨️ (vive dentro del álbum) ---
+  $('btn-print').addEventListener('click', () => {
+    renderPassport(handlers.getProfile?.() ?? null);
+    $('album').classList.add('hidden');
+    $('passport').classList.remove('hidden');
+    window.print();
+  });
+  $('passport-close').addEventListener('click', () => $('passport').classList.add('hidden'));
+
+  // --- Overlay de fase lunar 🌗 (emoji grande sobreimpreso, sin texto) ---
+  const phaseOverlay = $('phase-overlay');
+  const phaseEmojiEl = $('phase-emoji');
+  let lastPhaseEmoji = null;
+
+  // --- Banner de turno 👫 (avatar grande + nombre, animación pop) ---
+  let turnTimer = null;
 
   return {
     setTourActive(active) { $('btn-tour').classList.toggle('active', active); },
@@ -253,6 +282,61 @@ export function initUI(settings, handlers) {
     setCompareActive(active) { $('btn-compare').classList.toggle('active', active); },
     setQuizActive(active) { $('btn-quiz').classList.toggle('active', active); },
     setLevelsActive(active) { $('btn-levels').classList.toggle('active', active); },
+    setGravityActive(active) { $('btn-gravity').classList.toggle('active', active); },
+    setDuoActive(active) { $('btn-duo').classList.toggle('active', active); },
+    /** Banner "¡Te toca!" del quiz de a dos: avatar grande + nombre, pop. */
+    showTurnBanner(player) {
+      const banner = $('turn-banner');
+      $('turn-avatar').textContent = player.avatar ?? '🧑‍🚀';
+      $('turn-name').textContent = player.name ?? '';
+      banner.classList.remove('hidden');
+      // Reinicia la animación pop aunque el banner ya estuviera visible
+      banner.style.animation = 'none';
+      void banner.offsetWidth;
+      banner.style.animation = '';
+      clearTimeout(turnTimer);
+      turnTimer = setTimeout(() => banner.classList.add('hidden'), 3200);
+    },
+    hideTurnBanner() {
+      clearTimeout(turnTimer);
+      $('turn-banner').classList.add('hidden');
+    },
+    /** Overlay 👫: lista de jugadores (reusa .welcome-profiles/.profile-opt). */
+    showDuoPicker(players, onPick) {
+      const box = $('duo-list');
+      box.innerHTML = '';
+      players.forEach((p, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'profile-opt';
+        btn.setAttribute('aria-label', `Jugar con ${p.name}`);
+        const avatar = document.createElement('span');
+        avatar.className = 'profile-avatar';
+        avatar.textContent = p.avatar ?? '🧑‍🚀';
+        const name = document.createElement('span');
+        name.className = 'profile-name';
+        name.textContent = p.name ?? '';
+        btn.append(avatar, name);
+        btn.addEventListener('click', () => onPick(i));
+        box.appendChild(btn);
+      });
+      $('duo-picker').classList.remove('hidden');
+    },
+    hideDuoPicker() { $('duo-picker').classList.add('hidden'); },
+    setEclipseButtonVisible(v) { $('btn-eclipse').classList.toggle('hidden', !v); },
+    setScaleButtonVisible(v) { $('btn-scale').classList.toggle('hidden', !v); },
+    setScaleActive(active) { $('btn-scale').classList.toggle('active', active); },
+    /** Se llama por frame: solo toca el DOM cuando el emoji cambia. */
+    setPhaseEmoji(emoji) {
+      if (phaseOverlay.classList.contains('hidden')) phaseOverlay.classList.remove('hidden');
+      if (emoji !== lastPhaseEmoji) {
+        lastPhaseEmoji = emoji;
+        phaseEmojiEl.textContent = emoji;
+      }
+    },
+    hidePhaseOverlay() {
+      phaseOverlay.classList.add('hidden');
+      lastPhaseEmoji = null;
+    },
     setPaused(paused) { paintPause(paused); },
     hidePanels: closeAllPanels,
     showAlbum,
@@ -293,6 +377,63 @@ export function popSticker(emoji) {
   void el.offsetWidth;
   el.style.animation = '';
   setTimeout(() => pop.classList.add('hidden'), 1900);
+}
+
+// ---------- Pasaporte espacial 🖨️ ----------
+const escapeHTML = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** Fecha amable para los sellos: '2026-06-12' → '12 jun 2026'. */
+function prettyDate(iso) {
+  const [y, m, d] = String(iso ?? '').split('-').map(Number);
+  if (!y || !m || !d) return '';
+  const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  return `${d} ${MESES[m - 1]} ${y}`;
+}
+
+/**
+ * Pinta el pasaporte del perfil en #passport-page: avatar + nombre, sellos del
+ * Sol y los 8 planetas (con fecha si hay p.visits; si no, vale la pegatina
+ * visit-{id} de partidas viejas), pegatinas ganadas y pie de certificación.
+ * Lo que se imprime con window.print() es exactamente esto (CSS @media print).
+ */
+export function renderPassport(profile) {
+  const page = document.getElementById('passport-page');
+  const visits = profile?.visits ?? {};
+  const unlocked = new Set(loadStickers());
+  const stamps = [SUN, ...PLANETS].map((b) => {
+    const v = visits[b.id];
+    const visited = !!v || unlocked.has(`visit-${b.id}`);
+    if (!visited) {
+      return `<div class="pass-stamp pending" aria-label="${b.name}: todavía sin visitar">
+        <span class="pass-stamp-emoji">❔</span>
+        <span class="pass-stamp-name">${b.name}</span>
+      </div>`;
+    }
+    const date = v?.last ? `<span class="pass-stamp-date">${prettyDate(v.last)}</span>` : '';
+    return `<div class="pass-stamp visited" aria-label="${b.name}: visitado">
+      <span class="pass-stamp-emoji">${b.emoji}</span>
+      <span class="pass-stamp-name">${b.name}</span>
+      ${date}
+    </div>`;
+  }).join('');
+  const stickers = STICKERS.filter((s) => unlocked.has(s.id))
+    .map((s) => `<span class="pass-sticker" aria-label="${s.name}">${s.emoji}</span>`).join('')
+    || '<span class="pass-none">Todavía sin pegatinas… ¡a explorar! 🚀</span>';
+  page.innerHTML = `
+    <div class="pass-header">
+      <span class="pass-avatar">${profile?.avatar ?? '🧑‍🚀'}</span>
+      <div class="pass-id">
+        <span class="pass-name">${escapeHTML(profile?.name ?? 'Astronauta')}</span>
+        <span class="pass-title">🚀 Pasaporte Espacial 🪐</span>
+      </div>
+      <span class="pass-deco">🌟</span>
+    </div>
+    <div class="pass-stamps">${stamps}</div>
+    <div class="pass-sub">✨ Mis pegatinas</div>
+    <div class="pass-stickers">${stickers}</div>
+    <div class="pass-foot">🧑‍🚀 Astronauta certificado · Mi Universo 🌌</div>
+  `;
 }
 
 // ---------- Tarjeta del planeta ----------

@@ -45,22 +45,74 @@ const BLOCKED_INPUT = [
   /\b(novio|novia|beso|desnud|cuerpo humano|hacer beb[eé]s)\b/i,
 ];
 
-function buildSystemPrompt(name, age) {
-  const safeName = String(name || 'amiguito').slice(0, 24).replace(/[^\p{L}\p{N} ]/gu, '');
-  const safeAge = Math.min(Math.max(parseInt(age, 10) || 5, 3), 6);
-  return `Eres Boti Bot 🤖, el amigo intergaláctico de ${safeName}, que tiene ${safeAge} años.
+// Whitelist OBLIGATORIA del planeta favorito: el cliente manda un id y aquí
+// se interpola SOLO el nombre fijo de esta tabla. Jamás texto libre del
+// cliente al prompt (un favorite:'<script>' o similar se descarta entero).
+const FAVORITE_NAMES = {
+  mercurio: 'Mercurio', venus: 'Venus', tierra: 'la Tierra', marte: 'Marte',
+  jupiter: 'Júpiter', saturno: 'Saturno', urano: 'Urano', neptuno: 'Neptuno',
+  luna: 'la Luna', sol: 'el Sol',
+};
+function safeFavoriteName(favorite) {
+  return (typeof favorite === 'string' && Object.hasOwn(FAVORITE_NAMES, favorite))
+    ? FAVORITE_NAMES[favorite]
+    : null;
+}
+
+function sanitizeName(name) {
+  return String(name || 'amiguito').slice(0, 24).replace(/[^\p{L}\p{N} ]/gu, '');
+}
+function sanitizeAge(age) {
+  return Math.min(Math.max(parseInt(age, 10) || 5, 3), 10);
+}
+
+function buildSystemPrompt(name, age, favoriteName) {
+  const safeName = sanitizeName(name);
+  const safeAge = sanitizeAge(age);
+  const favLine = favoriteName
+    ? ` Su planeta favorito es ${favoriteName}; menciónalo con cariño si viene al caso.`
+    : '';
+  // Profundidad por edad (3-10): los chiquitos quieren imágenes, los grandes
+  // quieren números y el porqué. Boti sigue siendo el mismo amigo cariñoso.
+  const depthLine = safeAge <= 6
+    ? `- Responde 2 a 3 frases muy simples para un niño de ${safeAge} años. Da el dato con una comparación de juguete (manzanas, pelotas, casas, helados) más que con números grandes.`
+    : `- Responde 3 a 4 frases claras para un niño de ${safeAge} años. PUEDES dar el número o dato real (grados, tamaño, distancia, cuántas lunas) y explicar el porqué, siempre con una comparación que se entienda.`;
+  return `Eres Boti Bot 🤖, el amigo intergaláctico de ${safeName}, que tiene ${safeAge} años. Sabes MUCHÍSIMO del universo y te ENCANTA contarlo.${favLine}
 
 REGLAS ESTRICTAS (no negociables):
-- SOLO respondes sobre el universo: espacio, planetas, estrellas, la Luna, el Sol, astronautas, cohetes, cometas, galaxias.
-- Respuestas de 1 a 3 frases CORTAS, en español muy simple para un niño de ${safeAge} años. Tono alegre y cariñoso.
-- Usa comparaciones de la vida del niño: manzanas, pelotas, casas, juguetes, helados.
+- SOLO respondes sobre el universo: espacio, planetas, estrellas, la Luna, el Sol, astronautas, cohetes, cometas, galaxias, agujeros negros, nebulosas, distancias, temperaturas, de qué están hechos.
+- SIEMPRE que te pregunten un dato (a qué temperatura, qué tan grande, qué tan lejos, cuántas lunas, de qué está hecho, cuánto pesa, cuántos años tiene) DA la respuesta REAL traducida para un niño. Ejemplo: el Sol está a unos 5.500 grados en su superficie → "tan caliente que derretiría todo; ¡más que mil hornos juntos!".
+${depthLine}
+- Tono alegre y cariñoso. Usa comparaciones de la vida del niño: manzanas, pelotas, casas, juguetes, helados.
+- Casi SIEMPRE sabes la respuesta: respóndela con seguridad. Solo si de verdad NADIE en el mundo lo sabe todavía (por ejemplo si hay extraterrestres) dilo con honestidad y curiosidad: "¡Todavía nadie lo sabe! Los científicos lo buscan con telescopios gigantes 🔭". NUNCA digas "pregúntale a un astrónomo" ni mandes al niño a buscar la respuesta a otra parte.
 - Si preguntan algo FUERA del espacio: responde exactamente "¡Yo solo sé de estrellas y planetas, ${safeName}! ¿Me preguntas algo del espacio?" y nada más.
 - NUNCA contenido aterrador: los agujeros negros son "aspiradoras gigantes del espacio que viven lejísimos", nunca algo que destruye o da miedo.
 - NUNCA pidas ni repitas datos personales (dirección, escuela, teléfono).
 - NUNCA des instrucciones de hacer cosas peligrosas, ni menciones enlaces, marcas, apps o videos.
-- Si no sabes la respuesta: "¡Esa es una pregunta súper difícil! ¡Preguntemos a un astrónomo!".
 - Puedes usar 1 o 2 emojis del espacio (🚀🌙⭐🪐) por respuesta.
 - Responde SOLO en texto plano: NUNCA uses markdown ni asteriscos (*texto*) ni guiones bajos (_texto_) para dar énfasis. Tu respuesta se lee en voz alta tal cual.`;
+}
+
+// Cuentos 📖: prompt aparte (más largo que una respuesta normal, por eso
+// max_tokens 500 SOLO aquí). Mismos guardarraíles de tono que el prompt base.
+function buildStoryPrompt(name, age, favoriteName) {
+  const safeName = sanitizeName(name);
+  const safeAge = sanitizeAge(age);
+  const placeRule = favoriteName
+    ? `el que mencione la pregunta; si no menciona ninguno, usa ${favoriteName}, su lugar favorito`
+    : 'el que mencione la pregunta; si no menciona ninguno, elige tú un planeta del sistema solar';
+  return `Eres Boti Bot 🤖, el amigo intergaláctico de ${safeName}, que tiene ${safeAge} años. Ahora eres su cuentacuentos del espacio.
+
+REGLAS DEL CUENTO (no negociables):
+- Cuenta UN cuento corto de 4 a 6 frases, en español muy simple para un niño de ${safeAge} años.
+- Protagonista: un personaje amable (un animalito, un robotito, una estrellita...) que visita o vive en UN lugar del espacio.
+- El lugar es un planeta, la Luna o el Sol: ${placeRule}.
+- Tono dulce y alegre, CERO miedo: nada de monstruos, peligros, tormentas que asusten ni personajes malos.
+- Cierre dulce: el cuento termina con algo bonito (un abrazo, un deseo, dormirse feliz, un nuevo amigo).
+- Usa comparaciones de la vida del niño: manzanas, pelotas, casas, juguetes, helados.
+- Puedes usar 1 o 2 emojis del espacio (🚀🌙⭐🪐) en todo el cuento.
+- NUNCA pidas ni repitas datos personales, NUNCA menciones enlaces, marcas, apps o videos.
+- Responde SOLO el cuento en texto plano: sin título, sin markdown, sin asteriscos (*texto*) ni guiones bajos (_texto_). Se lee en voz alta tal cual.`;
 }
 
 const CANNED = {
@@ -91,8 +143,10 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/ask', async (req, res) => {
   const t0 = Date.now();
-  const { question, name, age } = req.body ?? {};
+  const { question, name, age, story, favorite } = req.body ?? {};
   const cleanName = String(name || '').slice(0, 24);
+  const isStory = story === true;                    // SOLO el boolean true activa el cuento
+  const favName = safeFavoriteName(favorite);        // whitelist: id válido o null, nunca texto libre
 
   if (!question || typeof question !== 'string' || question.length > 300) {
     return res.status(400).json({ ok: false, text: CANNED.error });
@@ -114,8 +168,13 @@ app.post('/api/ask', async (req, res) => {
   try {
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5',
-      max_tokens: 200,                       // respuestas cortas = control de costo
-      system: buildSystemPrompt(cleanName, age),
+      // Respuestas con sustancia pero acotadas (control de costo): 350 da sitio
+      // para un dato real + comparación sin irse a un ensayo. Los cuentos 📖
+      // (4-6 frases) necesitan más: 500 SOLO cuando story === true.
+      max_tokens: isStory ? 500 : 350,
+      system: isStory
+        ? buildStoryPrompt(cleanName, age, favName)
+        : buildSystemPrompt(cleanName, age, favName),
       messages: [{ role: 'user', content: question.slice(0, 300) }],
     });
     const text = response.content
@@ -125,7 +184,7 @@ app.post('/api/ask', async (req, res) => {
       .trim();
     // Log de éxito (no solo de error): en Render es la única pista de que
     // el pipeline completo respondió, aunque en el aparato no se oiga nada.
-    console.log('[ask] llm', `${Date.now() - t0}ms`);
+    console.log('[ask]', isStory ? 'llm-story' : 'llm', `${Date.now() - t0}ms`);
     res.json({ ok: true, text: text || CANNED.error, source: 'llm' });
   } catch (err) {
     console.error('[ask]', err.status ?? '', err.message);
@@ -141,7 +200,8 @@ app.post('/api/tts', async (req, res) => {
   const t0 = Date.now();
   if (!TTS_KEY) return res.json({ ok: false, reason: 'no-tts' });
   if (ttsDead) return res.json({ ok: false, reason: 'tts-disabled' });
-  const text = String(req.body?.text || '').slice(0, 500);
+  // 900 y no 500: los cuentos de Boti 📖 (4-6 frases) deben caber en la voz
+  const text = String(req.body?.text || '').slice(0, 900);
   if (!text) return res.json({ ok: false, reason: 'empty' });
 
   try {

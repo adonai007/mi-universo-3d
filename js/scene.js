@@ -5,17 +5,28 @@
 // FALLBACK procedural si el archivo no carga (funciona offline u offline parcial).
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { SUN, PLANETS, MOON, EXTRAS } from './planets.js';
+import { SUN, PLANETS, MOON, EXTRAS, REAL_AU, GRAVITY } from './planets.js';
 import {
   createPlanetTexture, createSunTexture,
   createGlowTexture, createDotTexture, createRingTexture, createLabelTexture,
   createMoonTexture, createEarthCloudsTexture, createMilkyWayTexture,
+  createShadowSpotTexture,
 } from './textures.js';
 import { createBlackHole } from './blackhole.js';
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const STAR_COUNTS = { low: 1200, normal: 4000, high: 9000 };
+
+// Cometa ☄️: órbita elíptica con el Sol en el foco (r = p / (1 + e·cosθ)),
+// plano inclinado y velocidad kepleriana (dθ/dt = K/r²: corre en el perihelio,
+// pasea en el afelio). Perihelio ≈ 24.8, afelio ≈ 99.2 (entre Marte y Júpiter
+// REALES en modo escala — no estorba). K = 190 → período ≈ 102 s.
+const COMET_A = 62;
+const COMET_E = 0.6;
+const COMET_INCL = 0.35;
+const COMET_P = COMET_A * (1 - COMET_E * COMET_E);   // semi-latus rectum ≈ 39.7
+const COMET_K = 190;
 
 // En vista libre el target es el Sol (origen): el zoom nunca debe meter la
 // cámara dentro del resplandor (sprites aditivos de corona = pantalla amarilla).
@@ -126,9 +137,21 @@ export class SolarSystem {
     this.compareActive = false;
     this.galaxyActive = false;
     this.moonPhaseActive = false;
+    this.moonAutoOrbit = false;     // modo fases 🌗: la Luna recorre su órbita sola
+    this.eclipseActive = false;     // sub-modo eclipses 🌞🌚 (vive dentro de fases)
+    this.eclipseKind = null;        // 'solar' | 'lunar'
+    this.eclipseParts = null;       // { spot, cone } se crean perezosamente
+    this.moonDrive = null;          // tween/barrido del ángulo orbital de la Luna
+    this.moonDirSign = 1;           // sentido pivote→fase (se sondea al alinear)
+    this.moonOrigColor = null;      // color/emissive originales de la Luna (restaurables)
     this.customPlanets = [];
     this.missionDefId = null;
     this.shootingStar = null;
+    this.astronaut = null;          // 🧑‍🚀 saluda ~6 s al visitar la ISS
+    this.scaleActive = false;       // modo escala real 🏔 (distancias verdaderas)
+    this.scaleMix = 0;              // 0 = dibujo compacto, 1 = REAL_AU
+    this.scaleGoal = 0;
+    this.ball = null;               // 🏀 pelota del modo gravedad (un solo cuerpo a la vez)
     this.earthNightUniforms = null;   // luces de ciudad 🌃 (si carga el nightmap)
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -613,6 +636,119 @@ export class SolarSystem {
     this.pickables.push(pick);
   }
 
+  /** Textura canvas-emoji del astronauta (patrón #missionStarTexture).
+   *  Si el sistema no une 🧑+ZWJ+🚀 en UN glifo (tofu doble), fallback 👋. */
+  #astronautTexture() {
+    if (!this._astronautTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const ctx = c.getContext('2d');
+      ctx.font = '100px "Segoe UI Emoji", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const joined = ctx.measureText('🧑‍🚀').width;
+      const single = ctx.measureText('🧑').width;
+      const emoji = joined <= single * 1.4 ? '🧑‍🚀' : '👋';
+      ctx.shadowColor = 'rgba(160,200,255,0.9)';
+      ctx.shadowBlur = 14;
+      ctx.fillText(emoji, 64, 70);
+      this._astronautTex = new THREE.CanvasTexture(c);
+      this._astronautTex.colorSpace = THREE.SRGBColorSpace;
+    }
+    return this._astronautTex;
+  }
+
+  /** Un astronauta 🧑‍🚀 sale de la estación y saluda ~6 s al visitante. */
+  showAstronautWave() {
+    if (!this.iss) return;
+    this.#removeAstronaut();
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.#astronautTexture(), transparent: true, depthWrite: false,
+    }));
+    sprite.scale.set(1.4, 1.4, 1);
+    sprite.position.set(0, 1.1, 0);
+    this.iss.add(sprite);
+    this.astronaut = { sprite, life: 0, maxLife: 6 };
+  }
+
+  #removeAstronaut() {
+    const a = this.astronaut;
+    if (!a) return;
+    this.iss.remove(a.sprite);
+    a.sprite.material.dispose();   // la textura está cacheada: no se libera
+    this.astronaut = null;
+  }
+
+  // ---------- gravedad jugable 🏀 ----------
+  /** Textura canvas-emoji de la pelota (cacheada, patrón #missionStarTexture). */
+  #ballTexture() {
+    if (!this._ballTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const ctx = c.getContext('2d');
+      ctx.font = '100px "Segoe UI Emoji", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(255,160,60,0.8)';
+      ctx.shadowBlur = 12;
+      ctx.fillText('🏀', 64, 70);
+      this._ballTex = new THREE.CanvasTexture(c);
+      this._ballTex.colorSpace = THREE.SRGBColorSpace;
+    }
+    return this._ballTex;
+  }
+
+  /**
+   * Lanza la pelota 🏀 sobre un cuerpo del modo gravedad. Parábola determinista
+   * y = size + v·t − ½·(g·A)·t² con A = 12, v = √(2·g·A·h) y pico h = size·0.9/g:
+   * en la Luna (g 0.17) sube ALTÍSIMO y en Júpiter (g 2.53) casi nada.
+   * 3 rebotes con restitución 0.55 y reposo. Tocar de nuevo relanza.
+   */
+  launchBall(id) {
+    this.removeBall();
+    const grav = GRAVITY[id];
+    if (!grav) return false;
+    let parent = null;
+    let size = 0;
+    if (id === 'luna') {
+      const earth = this.planets.find((p) => p.def.id === 'tierra');
+      parent = earth?.moonMesh;          // viaja con la Luna en su órbita
+      size = MOON.size;
+    } else {
+      const rec = this.planets.find((p) => p.def.id === id);
+      parent = rec?.holder;              // mismo padre que el marcador de misión ⭐
+      size = rec?.def.size ?? 0;
+    }
+    if (!parent) return false;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.#ballTexture(), transparent: true, depthWrite: false,
+    }));
+    // Sprite dinámico nuevo: sin culling (regla del proyecto — la esfera
+    // envolvente inicial queda obsoleta cuando el holder viaja por su órbita).
+    sprite.frustumCulled = false;
+    const d = THREE.MathUtils.clamp(size * 0.42, 0.42, 1.7);   // pelota a escala del cuerpo
+    sprite.scale.set(d, d, 1);
+    sprite.position.set(0, size, 0);
+    parent.add(sprite);
+    const accel = grav.g * 12;                 // A = 12 (aceleración de juego)
+    const h = (size * 0.9) / grav.g;           // pico del primer bote
+    this.ball = {
+      sprite, parent, size,
+      accel, v: Math.sqrt(2 * accel * h),
+      t: 0, bounces: 0, resting: false,
+    };
+    return true;
+  }
+
+  /** Quita la pelota (salida del modo gravedad o relanzamiento). */
+  removeBall() {
+    const b = this.ball;
+    if (!b) return;
+    b.parent.remove(b.sprite);
+    b.sprite.material.dispose();   // la textura está cacheada: no se libera
+    this.ball = null;
+  }
+
   /** Rover explorador sobre la superficie de Marte. 🤖 */
   #buildRover(marsRec) {
     const rover = new THREE.Group();
@@ -676,6 +812,7 @@ export class SolarSystem {
     this.solarGroup.add(this.belt);
   }
 
+  /** Cometa ☄️ tocable y visitable: órbita kepleriana + cola anti-solar. */
   #buildComet() {
     this.comet = new THREE.Group();
     const head = new THREE.Mesh(
@@ -683,6 +820,13 @@ export class SolarSystem {
       new THREE.MeshBasicMaterial({ color: 0xcfeaff })
     );
     this.comet.add(head);
+    // Cabellera (coma): halo suave para que se vea de lejos
+    const coma = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: this.glowTexture, color: 0xbfe2ff, transparent: true,
+      opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    coma.scale.setScalar(3.2);
+    this.comet.add(coma);
     const N = 120;
     const trailGeo = new THREE.BufferGeometry();
     trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
@@ -691,9 +835,21 @@ export class SolarSystem {
       transparent: true, opacity: 0.75, depthWrite: false,
       blending: THREE.AdditiveBlending, sizeAttenuation: true,
     }));
+    // La cola se recalcula entera cada frame y viaja por TODA la órbita: la
+    // esfera envolvente inicial queda obsoleta y three.js la sacaría de cámara
+    // (cola invisible). Sin culling: 120 puntos no le cuestan nada al GPU.
+    this.cometPoints.frustumCulled = false;
     this.solarGroup.add(this.comet, this.cometPoints);
     this.cometAngle = 0;
-    this.cometHistory = [];
+    // Zona de toque generosa (dedos pequeños) + foco para volar hasta él
+    const pick = new THREE.Mesh(
+      new THREE.SphereGeometry(6, 8, 6),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    pick.userData = { def: EXTRAS.cometa, isPickable: true };
+    this.comet.add(pick);
+    this.pickables.push(pick);
+    this.focusTargets.set('cometa', this.comet);
   }
 
   /** Esfera gigante con la Vía Láctea (textura real con fallback procedural). */
@@ -1089,6 +1245,49 @@ export class SolarSystem {
     this.controls.maxDistance = 260;
   }
 
+  // ---------- modo escala real 🏔 ----------
+  // Las distancias DE VERDAD: lerp de holder.position.x + scale de la línea
+  // de órbita (escalar Object3D, NUNCA regenerar geometría — Android medio).
+  // El dibujo normal comprime las órbitas para ver a todos juntos.
+  enterScale(onDone) {
+    this.scaleActive = true;
+    this.scaleGoal = 1;
+    this.followTarget = null;
+    this.selected = null;
+    this.controls.maxDistance = 1300;     // patrón enterGalaxy: el cielo crece
+    this.onFlyDone = onDone ?? null;
+    this.cameraTween = {
+      t: 0, duration: REDUCED_MOTION ? 0.01 : 3,
+      fromPos: this.camera.position.clone(),
+      toPos: new THREE.Vector3(0, 430, 980),
+      fromTarget: this.controls.target.clone(),
+      toTarget: new THREE.Vector3(0, 0, 0),
+      fixed: true,
+    };
+  }
+
+  exitScale() {
+    this.scaleActive = false;
+    this.scaleGoal = 0;                   // las órbitas vuelven solas (animado)
+    this.controls.maxDistance = 260;
+  }
+
+  /** Aplica scaleMix (0 = dibujo compacto, 1 = distancias reales). */
+  #applyScaleMix() {
+    const mix = this.scaleMix;
+    for (const p of this.planets) {
+      const au = REAL_AU[p.def.id];
+      if (!au) continue;                  // los planetas del niño no se mueven
+      const radioReal = Math.max(au * 27, 14);   // Tierra conserva 27; Neptuno ~812
+      p.holder.position.x = THREE.MathUtils.lerp(p.def.orbitRadius, radioReal, mix);
+      p.orbit.scale.setScalar(THREE.MathUtils.lerp(1, radioReal / p.def.orbitRadius, mix));
+      const ls = 1 + 2 * mix;             // etiquetas más grandes de tan lejos
+      p.label.scale.set(10 * ls, 3.1 * ls, 1);
+    }
+    // Cinturón real (2.2-3.2 UA): de 37-42 del dibujo a ~69-79
+    this.belt.scale.setScalar(THREE.MathUtils.lerp(1, 1.87, mix));
+  }
+
   /** El agujero negro "come" una estrellita ya mismo (espaguetización 🍝). */
   feedBlackHole() {
     this.blackHole?.feed();
@@ -1098,9 +1297,12 @@ export class SolarSystem {
   enterMoonPhase(onDone) {
     this.moonPhaseActive = true;
     const earth = this.planets.find((p) => p.def.id === 'tierra');
+    // Luna agrandada SOLO en esta lección: a escala de la escena es demasiado
+    // pequeña para ver su mitad iluminada en un celular (se restaura al salir)
+    earth.moonMesh.scale.setScalar(1.8);
     this.followTarget = earth.def;
     this.selected = MOON;
-    this.controls.minDistance = 6;   // la cámara queda a 13 de la Tierra
+    this.controls.minDistance = 6;   // la cámara queda a 10.5 de la Tierra
     const target = this.worldPositionOf(earth.def);
     // Cámara perpendicular a la línea Sol-Tierra: las fases se ven clarísimas
     const sunDir = target.clone().normalize();
@@ -1109,15 +1311,31 @@ export class SolarSystem {
     this.cameraTween = {
       t: 0, duration: REDUCED_MOTION ? 0.01 : 1.5,
       fromPos: this.camera.position.clone(),
-      dir: sideDir, dist: 13,
+      dir: sideDir, dist: 10.5,
       fromTarget: this.controls.target.clone(),
       fixed: false,
     };
   }
 
   exitMoonPhase() {
+    if (this.eclipseActive) this.exitEclipse();   // defensivo: nunca dejar restos
     this.moonPhaseActive = false;
+    this.moonAutoOrbit = false;
+    this.#cancelMoonDrive();
+    const earth = this.planets.find((p) => p.def.id === 'tierra');
+    if (earth?.moonMesh) earth.moonMesh.scale.setScalar(1);   // tamaño normal
     this.selected = null;
+  }
+
+  /** Enciende/apaga la órbita lunar automática del modo fases (ciclo ~22 s). */
+  setMoonAutoOrbit(on) {
+    this.moonAutoOrbit = on;
+    if (on) {
+      // Sonda del sentido pivote→fase: el ciclo SIEMPRE avanza como el real
+      // (nueva → creciente → llena → menguante), nunca al revés.
+      const earth = this.planets.find((p) => p.def.id === 'tierra');
+      if (earth?.moonPivot) this.#pivotAngleForPhase(earth, 0);
+    }
   }
 
   /** Gira la Luna alrededor de la Tierra (arrastre del niño). */
@@ -1126,8 +1344,8 @@ export class SolarSystem {
     if (earth.moonPivot) earth.moonPivot.rotation.y += deltaAngle;
   }
 
-  /** Fase actual: 'llena' | 'nueva' | 'creciente' | 'menguante'. */
-  currentMoonPhase() {
+  /** Ángulo Sol-Tierra-Luna continuo (-π..π): 0 = nueva, ±π = llena. */
+  moonPhaseAngle() {
     const earth = this.planets.find((p) => p.def.id === 'tierra');
     const e = new THREE.Vector3(), m = new THREE.Vector3();
     earth.mesh.getWorldPosition(e);
@@ -1136,10 +1354,246 @@ export class SolarSystem {
     const toMoon = m.sub(e).setY(0).normalize();
     const dot = toSun.dot(toMoon);
     const cross = toSun.x * toMoon.z - toSun.z * toMoon.x;
-    const ang = Math.atan2(cross, dot);                        // -π..π
-    if (Math.abs(ang) < 0.55) return 'nueva';
-    if (Math.abs(ang) > 2.6) return 'llena';
+    return Math.atan2(cross, dot);                             // -π..π
+  }
+
+  /** Fase actual: 'llena' | 'nueva' | 'creciente' | 'menguante'.
+   *  Umbrales alineados con los sectores del emoji grande (π/8 = 22.5°). */
+  currentMoonPhase() {
+    const ang = this.moonPhaseAngle();
+    if (Math.abs(ang) < Math.PI / 8) return 'nueva';
+    if (Math.abs(ang) > Math.PI * 7 / 8) return 'llena';
     return ang > 0 ? 'creciente' : 'menguante';
+  }
+
+  /** Avance de la Luna en modo fases (se llama desde update, solo la Tierra). */
+  #updateMoonDrive(earthRec, dt) {
+    const pivot = earthRec.moonPivot;
+    const d = this.moonDrive;
+    if (d) {
+      d.t += dt / d.duration;
+      // Alineación con easing (llegada suave); barrido lineal (velocidad constante)
+      const k = d.kind === 'align' ? easeInOutCubic(Math.min(d.t, 1)) : Math.min(d.t, 1);
+      pivot.rotation.y = THREE.MathUtils.lerp(d.from, d.to, k);
+      if (d.t >= 1) {
+        this.moonDrive = null;
+        if (d.onDone) d.onDone();
+      }
+    } else if (this.moonAutoOrbit) {
+      // Ciclo completo de fases en ~22 s: tranquilo y predecible (independiente
+      // del slider de velocidad para que la lección siempre dure lo mismo)
+      pivot.rotation.y += this.moonDirSign * (Math.PI * 2 / 22) * dt;
+    }
+    if (this.eclipseActive) this.#updateEclipse(earthRec);
+  }
+
+  /** Cancela el tween/barrido lunar despertando a quien lo esperaba. */
+  #cancelMoonDrive() {
+    const d = this.moonDrive;
+    this.moonDrive = null;
+    if (d?.onDone) d.onDone();   // el flujo despierta y ve su token viejo
+  }
+
+  // ---------- eclipses 🌞🌚 (sub-modo dentro de fases) ----------
+  // Sombras FAKE baratas y legibles (el PointLight no proyecta sombras reales):
+  //  - solar: disco oscuro (umbra + penumbra) pegado a la superficie terrestre,
+  //    posicionado intersectando el rayo Sol→Luna con la esfera de la Tierra,
+  //    así la mancha VIAJA por la Tierra mientras la Luna barre la alineación.
+  //  - lunar: cono de sombra translúcido tras la Tierra + Luna teñida rojiza
+  //    según qué tan adentro va ("Luna de sangre").
+  #buildEclipseParts(earthRec) {
+    if (this.eclipseParts) return;
+    const R = earthRec.def.size;
+    const spot = new THREE.Mesh(
+      new THREE.CircleGeometry(R * 0.7, 24),
+      new THREE.MeshBasicMaterial({
+        map: createShadowSpotTexture(), color: 0x000000,
+        transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide,
+      })
+    );
+    spot.visible = false;
+    this.solarGroup.add(spot);
+
+    // Cono de sombra terrestre en DOS capas (umbra + penumbra) en índigo
+    // translúcido: negro puro no se lee contra el espacio negro.
+    const L = MOON.orbitRadius * 2.1;     // el cono pasa de largo la órbita lunar
+    const mkCone = (r, opacity) => {
+      const g = new THREE.ConeGeometry(r, L, 24, 1, true);
+      g.translate(0, L / 2, 0);           // base en la Tierra, punta hacia afuera
+      return new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+        color: 0x1b1545, transparent: true, opacity,
+        depthWrite: false, side: THREE.DoubleSide,
+      }));
+    };
+    const cone = new THREE.Group();
+    cone.add(mkCone(R * 0.92, 0.4), mkCone(R * 1.18, 0.18));
+    cone.visible = false;
+    this.solarGroup.add(cone);
+    this.eclipseParts = { spot, cone };
+  }
+
+  /** Ángulo del pivote lunar para una fase deseada (mapeo casi lineal). */
+  #pivotAngleForPhase(earthRec, targetPhase) {
+    const pivot = earthRec.moonPivot;
+    const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
+    const theta0 = pivot.rotation.y;
+    const a0 = this.moonPhaseAngle();
+    pivot.rotation.y = theta0 + 0.05;          // sonda: ¿hacia dónde crece la fase?
+    const a1 = this.moonPhaseAngle();
+    pivot.rotation.y = theta0;
+    this.moonDirSign = wrap(a1 - a0) >= 0 ? 1 : -1;
+    return theta0 + this.moonDirSign * wrap(targetPhase - a0);
+  }
+
+  /**
+   * Entra al eclipse: alinea la Luna (un pelín ANTES de la fila perfecta) y
+   * vuela la cámara a un encuadre claro. onDone al terminar el vuelo.
+   */
+  enterEclipse(kind, onDone) {
+    const earth = this.planets.find((p) => p.def.id === 'tierra');
+    this.#buildEclipseParts(earth);
+    this.eclipseActive = true;
+    this.eclipseKind = kind;
+    this.moonAutoOrbit = false;
+    const mat = earth.moonMesh.material;
+    if (!this.moonOrigColor) {
+      this.moonOrigColor = mat.color.clone();
+      this.moonOrigEmissive = mat.emissive.clone();
+    }
+
+    const half = 0.5;                          // medio barrido (rad) a cada lado
+    const targetPhase = kind === 'solar' ? -half : Math.PI - half;
+    const duration = REDUCED_MOTION ? 0.01 : 2.0;
+    this.moonDrive = {
+      kind: 'align', from: earth.moonPivot.rotation.y,
+      to: this.#pivotAngleForPhase(earth, targetPhase),
+      t: 0, duration, onDone: null,
+    };
+
+    // Cámara fija: para el solar se mira la cara iluminada de la Tierra (ahí
+    // viaja la mancha); para el lunar se ve la Tierra y la Luna en su sombra.
+    const E = this.worldPositionOf(earth.def);
+    const dirSE = E.clone().normalize();                     // Sol(origen) → Tierra
+    const side = new THREE.Vector3(-dirSE.z, 0, dirSE.x);    // perpendicular
+    let toPos, toTarget;
+    if (kind === 'solar') {
+      // Poco desplazada del eje Sol-Tierra: la mancha se ve de frente, casi
+      // redonda, y la Luna queda grande en primer plano al lado de la Tierra
+      toPos = E.clone().addScaledVector(dirSE, -6.8).addScaledVector(side, 2.4);
+      toPos.y += 2.0;
+      toTarget = E.clone();
+    } else {
+      const moonFar = E.clone().addScaledVector(dirSE, MOON.orbitRadius);
+      toPos = E.clone().addScaledVector(side, 8.5).addScaledVector(dirSE, 2.2);
+      toPos.y += 3.2;
+      toTarget = E.clone().lerp(moonFar, 0.55);
+    }
+    this.followTarget = null;                  // cámara quieta durante el eclipse
+    this.onFlyDone = onDone ?? null;
+    this.cameraTween = {
+      t: 0, duration, fromPos: this.camera.position.clone(),
+      toPos, fromTarget: this.controls.target.clone(), toTarget, fixed: true,
+    };
+  }
+
+  /** El barrido: la Luna cruza la alineación y la sombra VIAJA. */
+  sweepEclipse(kind, onDone) {
+    const earth = this.planets.find((p) => p.def.id === 'tierra');
+    const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
+    const half = 0.5;
+    const targetPhase = kind === 'solar' ? half : Math.PI + half;
+    const delta = this.moonDirSign * wrap(targetPhase - this.moonPhaseAngle());
+    this.moonDrive = {
+      kind: 'sweep', from: earth.moonPivot.rotation.y,
+      to: earth.moonPivot.rotation.y + delta,
+      t: 0, duration: REDUCED_MOTION ? 0.01 : (kind === 'solar' ? 9 : 8),
+      onDone,
+    };
+  }
+
+  /** Visuales del eclipse por frame: mancha viajera, cono y Luna rojiza. */
+  #updateEclipse(earthRec) {
+    const { spot, cone } = this.eclipseParts;
+    const E = new THREE.Vector3();
+    earthRec.mesh.getWorldPosition(E);
+    const R = earthRec.def.size;
+
+    // La órbita lunar va inclinada con el eje terrestre: durante el eclipse la
+    // Luna se pega al plano Sol-Tierra (corrección en su Y local) para que la
+    // fila sea PERFECTA y la sombra cruce el centro. Legibilidad > física.
+    const moonMesh = earthRec.moonMesh;
+    moonMesh.position.y = 0;
+    const m0 = new THREE.Vector3();
+    moonMesh.getWorldPosition(m0);
+    const qPivot = new THREE.Quaternion();
+    earthRec.moonPivot.getWorldQuaternion(qPivot);
+    const upY = new THREE.Vector3(0, 1, 0).applyQuaternion(qPivot).y;
+    if (Math.abs(upY) > 0.5) {
+      moonMesh.position.y = THREE.MathUtils.clamp((E.y - m0.y) / upY, -1.6, 1.6);
+    }
+    const M = new THREE.Vector3();
+    moonMesh.getWorldPosition(M);
+
+    if (this.eclipseKind === 'solar') {
+      spot.visible = true;
+      cone.visible = false;
+      // Rayo Sol(origen)→Luna prolongado hasta la esfera de la Tierra
+      const d = M.clone().normalize();
+      const f = M.clone().sub(E);
+      const b = 2 * f.dot(d);
+      const c = f.lengthSq() - R * R;
+      const disc = b * b - 4 * c;
+      // Fundido suave cuando el rayo pasa cerca del borde (entra/sale limpio)
+      const perp = f.clone().sub(d.clone().multiplyScalar(f.dot(d))).length();
+      const fade = 1 - THREE.MathUtils.smoothstep(perp, R * 0.85, R * 1.05);
+      if (disc > 0) {
+        const t = (-b - Math.sqrt(disc)) / 2;
+        if (t > 0) {
+          const P = M.clone().addScaledVector(d, t);
+          const n = P.clone().sub(E).normalize();
+          spot.position.copy(E).addScaledVector(n, R * 1.03);
+          spot.lookAt(E.clone().addScaledVector(n, R * 3));
+        }
+      }
+      spot.material.opacity = fade;
+      this.#tintMoon(earthRec, 0);
+    } else {
+      // Lunar: cono de sombra terrestre + Luna de sangre
+      spot.visible = false;
+      cone.visible = true;
+      cone.position.copy(E);
+      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), E.clone().normalize());
+      const delta = Math.PI - Math.abs(this.moonPhaseAngle());
+      const redness = 1 - THREE.MathUtils.smoothstep(delta, 0.12, 0.40);
+      this.#tintMoon(earthRec, redness);
+    }
+  }
+
+  /** Tinte "Luna de sangre" 0..1 (siempre restaurable al original). */
+  #tintMoon(earthRec, redness) {
+    if (!this.moonOrigColor) return;
+    const mat = earthRec.moonMesh.material;
+    mat.color.copy(this.moonOrigColor).lerp(new THREE.Color(0xa83c22), redness * 0.85);
+    mat.emissive.copy(this.moonOrigEmissive).lerp(new THREE.Color(0x4a0f05), redness);
+  }
+
+  /** Sale del eclipse restaurando TODO (sombras ocultas, Luna blanca, Y = 0). */
+  exitEclipse() {
+    this.eclipseActive = false;
+    this.eclipseKind = null;
+    this.#cancelMoonDrive();
+    if (this.eclipseParts) {
+      this.eclipseParts.spot.visible = false;
+      this.eclipseParts.cone.visible = false;
+    }
+    const earth = this.planets.find((p) => p.def.id === 'tierra');
+    if (earth?.moonMesh) {
+      earth.moonMesh.position.y = 0;
+      if (this.moonOrigColor) {
+        earth.moonMesh.material.color.copy(this.moonOrigColor);
+        earth.moonMesh.material.emissive.copy(this.moonOrigEmissive);
+      }
+    }
   }
 
   // ---------- interacción ----------
@@ -1259,6 +1713,9 @@ export class SolarSystem {
       if (p.clouds) p.clouds.rotation.y += p.def.spinSpeed * 1.35 * speed * dt;
       if (p.moonPivot && !this.moonPhaseActive) {
         p.moonPivot.rotation.y += MOON.orbitSpeed * 0.5 * speed * dt;
+      } else if (p.moonPivot && p.def.id === 'tierra' && this.moonPhaseActive && !this.paused) {
+        // Modo fases 🌗 / eclipses 🌞🌚: tween de alineación, barrido o auto-órbita
+        this.#updateMoonDrive(p, dt);
       }
 
       p.mesh.getWorldPosition(wp);
@@ -1279,6 +1736,46 @@ export class SolarSystem {
 
     // ISS: vuelta rápida a la Tierra
     if (this.issPivot) this.issPivot.rotation.y += 1.1 * speed * dt;
+
+    // Astronauta 🧑‍🚀 saludando junto a la ISS (~6 s y se despide)
+    if (this.astronaut) {
+      const a = this.astronaut;
+      a.life += dt;
+      a.sprite.material.rotation = Math.sin(this.elapsed * 5) * 0.3;   // ¡hola, hola!
+      a.sprite.position.y = 1.1 + Math.sin(this.elapsed * 2.2) * 0.18;
+      a.sprite.material.opacity = THREE.MathUtils.clamp((a.maxLife - a.life) / 0.7, 0, 1);
+      if (a.life >= a.maxLife) this.#removeAstronaut();
+    }
+
+    // Pelota 🏀 del modo gravedad: parábola determinista + 3 rebotes (0.55).
+    // Tiempo real (independiente del slider 🐢/🐇): la lección dura lo mismo.
+    if (this.ball && !this.paused && !this.ball.resting) {
+      const b = this.ball;
+      b.t += dt;
+      let y = b.size + b.v * b.t - 0.5 * b.accel * b.t * b.t;
+      if (y <= b.size && b.t > dt * 0.5) {     // tocó el suelo (no el frame inicial)
+        if (b.bounces >= 3) {
+          b.resting = true;                    // reposo sobre la superficie
+          y = b.size;
+        } else {
+          b.bounces++;
+          b.v *= 0.55;                         // restitución: cada bote sube menos
+          b.t = 0;
+          y = b.size;
+        }
+      }
+      b.sprite.position.y = y;
+    }
+
+    // Transición del modo escala real 🏔 (entrada 3 s, vuelta más rápida)
+    if (this.scaleMix !== this.scaleGoal) {
+      const dur = REDUCED_MOTION ? 0.01 : (this.scaleGoal === 1 ? 3 : 1.2);
+      const step = dt / dur;
+      this.scaleMix = this.scaleGoal === 1
+        ? Math.min(1, this.scaleMix + step)
+        : Math.max(0, this.scaleMix - step);
+      this.#applyScaleMix();
+    }
 
     // Sol vivo: rotación, granulación animada (shader), llamaradas y corona
     this.sun.rotation.y += 0.02 * speed * dt;
@@ -1317,22 +1814,31 @@ export class SolarSystem {
 
     this.belt.rotation.y += 0.018 * speed * dt;
 
-    // Cometa + cola
-    this.cometAngle += 0.12 * speed * dt;
-    const ca = this.cometAngle;
-    this.comet.position.set(Math.cos(ca) * 95, Math.sin(ca * 0.7) * 18 + 8, Math.sin(ca) * 52);
-    this.cometHistory.unshift(this.comet.position.clone());
-    if (this.cometHistory.length > 40) this.cometHistory.pop();
-    const trailPos = this.cometPoints.geometry.attributes.position;
-    for (let i = 0; i < trailPos.count; i++) {
-      const h = this.cometHistory[Math.min((i / 3) | 0, this.cometHistory.length - 1)] ?? this.comet.position;
-      const jitter = (i / trailPos.count);
-      trailPos.setXYZ(i,
-        h.x + (Math.random() - 0.5) * jitter,
-        h.y + (Math.random() - 0.5) * jitter,
-        h.z + (Math.random() - 0.5) * jitter);
+    // Cometa ☄️: órbita elíptica kepleriana (corre cerca del Sol, pasea lejos)
+    {
+      const r0 = COMET_P / (1 + COMET_E * Math.cos(this.cometAngle));
+      this.cometAngle += (COMET_K / (r0 * r0)) * speed * dt;
+      const r = COMET_P / (1 + COMET_E * Math.cos(this.cometAngle));
+      const cx = Math.cos(this.cometAngle) * r;
+      const cz = Math.sin(this.cometAngle) * r;
+      // Plano orbital inclinado COMET_INCL alrededor del eje X
+      this.comet.position.set(cx, cz * Math.sin(COMET_INCL), cz * Math.cos(COMET_INCL));
+      // Cola SIEMPRE anti-solar: el viento del Sol la peina lejos de él y
+      // CRECE al acercarse (L = 1400/r entre 5 y 30) — "¡le peina la cola!"
+      const away = this.comet.position.clone().normalize();
+      const L = THREE.MathUtils.clamp(1400 / r, 5, 30);
+      const trailPos = this.cometPoints.geometry.attributes.position;
+      const nTail = trailPos.count;
+      for (let i = 0; i < nTail; i++) {
+        const t = i / (nTail - 1);
+        const spread = t * 1.4;          // la cola se abre hacia la punta
+        trailPos.setXYZ(i,
+          this.comet.position.x + away.x * L * t + (Math.random() - 0.5) * spread,
+          this.comet.position.y + away.y * L * t + (Math.random() - 0.5) * spread,
+          this.comet.position.z + away.z * L * t + (Math.random() - 0.5) * spread);
+      }
+      trailPos.needsUpdate = true;
     }
-    trailPos.needsUpdate = true;
 
     // Agujero negro: disco, lensing, jets y espaguetización
     if (this.galaxyActive) this.blackHole.update(dt, this.camera);
