@@ -984,6 +984,90 @@ html, body {
   #help-ring { animation: none; }
 }
 
+/* ====== Cielo real 🔭 (AR por sensores: apunta el celular al cielo) ====== */
+#btn-sky {
+  position: fixed;
+  top: calc(max(16px, env(safe-area-inset-top)) + 84px);
+  right: max(14px, env(safe-area-inset-right));
+  z-index: 12;
+}
+#sky-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 72;                 /* sobre la ayuda (70) */
+  overflow: hidden;
+  background: radial-gradient(120% 90% at 50% 0%, #0a1230 0%, #05030f 70%, #02010a 100%);
+  touch-action: none;
+}
+#sky-overlay.hidden { display: none; }
+
+#sky-markers { position: absolute; inset: 0; pointer-events: none; }
+.sky-marker {
+  position: absolute;
+  left: 0; top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  will-change: transform;
+}
+.sky-emoji { font-size: 2.2rem; filter: drop-shadow(0 0 8px rgba(150, 200, 255, 0.6)); }
+.sky-name {
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: #dfe7f5;
+  text-shadow: 0 1px 4px #000;
+  white-space: nowrap;
+}
+.sky-marker.sky-edge { opacity: 0.6; }
+.sky-marker.sky-edge .sky-emoji { font-size: 1.6rem; }
+.sky-marker.sky-hit .sky-emoji {
+  font-size: 3rem;
+  filter: drop-shadow(0 0 16px rgba(255, 215, 94, 0.95));
+  animation: help-pulse 1.1s ease-in-out infinite;
+}
+.sky-marker.sky-hit .sky-name { color: #ffd75e; }
+
+#sky-reticle {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 88px; height: 88px;
+  margin: -44px 0 0 -44px;
+  border: 3px solid rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+  pointer-events: none;
+}
+#sky-reticle.locked {
+  border-color: #ffd75e;
+  box-shadow: 0 0 22px 4px rgba(255, 215, 94, 0.7);
+}
+#sky-hint {
+  position: absolute;
+  left: 50%;
+  top: calc(max(16px, env(safe-area-inset-top)) + 8px);
+  transform: translateX(-50%);
+  width: min(92vw, 620px);
+  text-align: center;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: rgba(20, 20, 60, 0.85);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+#sky-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 10px);
+  transform: translateX(-50%);
+  display: flex;
+  gap: 16px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sky-marker.sky-hit .sky-emoji { animation: none; }
+}
+
 /* ---- Impresión 🖨️: SOLO el pasaporte sale en papel ----
    #passport gana a .hidden (mismo !important, más especificidad): aunque el
    overlay esté cerrado, Ctrl+P imprime el pasaporte (showAlbum lo pre-pinta). */
@@ -998,7 +1082,7 @@ html, body {
   #space, #toolbar, #games-row, #boti-hud, #boti-type, #album, #planet-card,
   #phase-overlay, #btn-eclipse, #btn-scale, #style-panel, #build-panel,
   #welcome, #sticker-pop, #no-webgl, #passport-close, #duo-picker, #turn-banner,
-  #btn-help, #help-overlay, #parent-panel {
+  #btn-help, #help-overlay, #btn-sky, #sky-overlay, #parent-panel {
     display: none !important;
   }
   #passport {

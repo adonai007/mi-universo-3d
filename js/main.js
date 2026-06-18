@@ -8,6 +8,7 @@ import {
 import * as audio from './audio.js';
 import { initBoti } from './boti.js';
 import { initHelp } from './help.js';
+import { initSky } from './sky.js';
 import {
   loadSettings, saveSettings, initUI,
   showPlanetCard, hidePlanetCard, setCardSpeaking, showQuestionCard,
@@ -69,6 +70,20 @@ btnHelp.dataset.tip = 'Ayuda: Boti te enseña a jugar';
 btnHelp.setAttribute('aria-label', 'Ayuda: Boti te enseña a jugar');
 btnHelp.addEventListener('click', () => help.start());
 document.body.appendChild(btnHelp);
+
+// ---------- Cielo real 🔭 (AR por sensores, módulo aislado) ----------
+// Apunta el celular al cielo y Boti dice qué estrella/planeta es. No toca la
+// escena ni los modos: overlay propio + efeméride real. Degrada solo si no hay
+// brújula/permiso/GPS.
+const sky = initSky({ speak: boti.speak, stopSpeech: boti.stopAllSpeech });
+const btnSky = document.createElement('button');
+btnSky.id = 'btn-sky';
+btnSky.className = 'big-btn';
+btnSky.textContent = '🔭';
+btnSky.dataset.tip = 'Cielo real: apunta al cielo';
+btnSky.setAttribute('aria-label', 'Cielo real: apunta el celular al cielo y Boti te dice qué es');
+btnSky.addEventListener('click', () => sky.start());
+document.body.appendChild(btnSky);
 
 // ---------- pegatinas ----------
 function award(id) {
