@@ -109,6 +109,7 @@ export function initBoti() {
   let recognition = null;
   let currentAudio = null;
   let helpHandler = null;   // lo inyecta main.js: lanza el recorrido del modo ayuda ❓
+  let lastExchange = null;  // {q, a} del último intercambio: da continuidad ("dame más")
 
   // Desbloqueo de la voz en el PRIMER gesto (bienvenida, mic, canvas, lo que
   // sea): Chrome Android exige un speak dentro de un gesto del usuario o Boti
@@ -138,6 +139,7 @@ export function initBoti() {
     const p = profiles.list[idx];
     writeJSON(STICKERS_KEY, p.stickers ?? []);
     writeJSON(QUIZ_KEY, p.quiz ?? { level: 0 });
+    lastExchange = null;          // el diálogo no se mezcla entre hermanos
     saveProfiles(profiles);
   }
 
@@ -376,6 +378,9 @@ export function initBoti() {
         // favorite va con whitelist en el server (solo ids de planeta válidos)
         const body = { question, name: p?.name, age: p?.age, favorite: getFavorite()?.id };
         if (wantsStory) body.story = true;   // el server valida story === true
+        // Diálogo: mandamos el último intercambio para que "dame más" / "¿por
+        // qué?" tengan continuidad. En cuentos no (son de una sola vez).
+        if (!wantsStory && lastExchange) body.context = lastExchange;
         const r = await fetch('api/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -392,6 +397,9 @@ export function initBoti() {
     }
     if (!answer) answer = wantsStory ? localStory(question) : localAnswer(question);
     recordQuestion(question, src);   // historial local del modo padres 👨‍👩‍👧
+    // Recordamos el último intercambio para el diálogo (no en cuentos: el
+    // siguiente "dame más" debe seguir el tema de datos, no la narración).
+    if (!wantsStory) lastExchange = { q: String(question).slice(0, 300), a: String(answer).slice(0, 1000) };
     setThinking(false);
     await botiSpeak(answer);
   }
@@ -458,6 +466,8 @@ export function initBoti() {
     '¡Aprieta el micrófono y pregúntame algo del espacio! 🎤',
     '¿Sabías que en Júpiter caben mil Tierras? ¡Pregúntame más! 🟤',
     '¡Bip bup! ¡Me encantan las estrellas! ⭐',
+    '¡Soy un robot que sabe muchísimo del espacio! ¿Le cuentas a un grande lo que aprendiste? 👨‍👩‍👧',
+    '¡Bip! Soy un robot. ¿Exploramos el universo juntos y se lo mostramos a un grande? 🚀',
   ];
   let longPressTimer = null;
   let longPressFired = false;
@@ -1014,5 +1024,7 @@ export function initBoti() {
     getProfiles,
     /** main.js inyecta el lanzador del modo ayuda ❓ (recorrido guiado). */
     setHelpHandler(fn) { helpHandler = typeof fn === 'function' ? fn : null; },
+    /** Persiste el perfil activo (lo usa el repaso espaciado del quiz). */
+    persist() { saveProfiles(profiles); },
   };
 }

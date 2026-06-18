@@ -89,6 +89,9 @@ ${depthLine}
 - NUNCA contenido aterrador: los agujeros negros son "aspiradoras gigantes del espacio que viven lejísimos", nunca algo que destruye o da miedo.
 - NUNCA pidas ni repitas datos personales (dirección, escuela, teléfono).
 - NUNCA des instrucciones de hacer cosas peligrosas, ni menciones enlaces, marcas, apps o videos.
+- DIÁLOGO: cuando venga bien, TERMINA con UNA sola pregunta cortita y concreta que invite a ${safeName} a pensar o a seguir explorando (por ejemplo "¿Y tú por qué crees que pasa eso?" o "¿Quieres que te cuente de qué está hecho?"). Una pregunta como mucho, y NUNCA en la frase de cuando preguntan algo fuera del espacio.
+- Si la pregunta de ${safeName} es un seguimiento ("y eso", "dame más", "¿por qué?", "cuéntame más"), entiende que sigue hablando del MISMO tema de antes y dale MÁS detalle nuevo, sin repetir lo ya dicho.
+- DE VEZ EN CUANDO (no en cada respuesta) recuerda con cariño que eres un robot que sabe del espacio, e invita a compartir: "¡cuéntale a un grande lo que descubriste!". Solo si viene al caso.
 - Puedes usar 1 o 2 emojis del espacio (🚀🌙⭐🪐) por respuesta.
 - Responde SOLO en texto plano: NUNCA uses markdown ni asteriscos (*texto*) ni guiones bajos (_texto_) para dar énfasis. Tu respuesta se lee en voz alta tal cual.`;
 }
@@ -143,10 +146,16 @@ app.get('/api/health', (_req, res) => {
 
 app.post('/api/ask', async (req, res) => {
   const t0 = Date.now();
-  const { question, name, age, story, favorite } = req.body ?? {};
+  const { question, name, age, story, favorite, context } = req.body ?? {};
   const cleanName = String(name || '').slice(0, 24);
   const isStory = story === true;                    // SOLO el boolean true activa el cuento
   const favName = safeFavoriteName(favorite);        // whitelist: id válido o null, nunca texto libre
+  // Memoria del turno anterior (diálogo): el cliente manda {q, a} del último
+  // intercambio para que "dame más" / "¿por qué?" tengan continuidad. Validado
+  // estricto (strings cortos) y solo fuera de los cuentos.
+  const prev = (!isStory && context && typeof context.q === 'string' && typeof context.a === 'string'
+    && context.q.length <= 300 && context.a.length <= 1000)
+    ? { q: context.q, a: context.a } : null;
 
   if (!question || typeof question !== 'string' || question.length > 300) {
     return res.status(400).json({ ok: false, text: CANNED.error });
@@ -175,7 +184,13 @@ app.post('/api/ask', async (req, res) => {
       system: isStory
         ? buildStoryPrompt(cleanName, age, favName)
         : buildSystemPrompt(cleanName, age, favName),
-      messages: [{ role: 'user', content: question.slice(0, 300) }],
+      messages: prev
+        ? [
+            { role: 'user', content: prev.q.slice(0, 300) },
+            { role: 'assistant', content: prev.a.slice(0, 1000) },
+            { role: 'user', content: question.slice(0, 300) },
+          ]
+        : [{ role: 'user', content: question.slice(0, 300) }],
     });
     const text = response.content
       .filter((b) => b.type === 'text')

@@ -463,6 +463,49 @@ function shuffled(arr) {
   return [...arr].sort(() => Math.random() - 0.5);
 }
 
+// ---------- repaso espaciado 🔁 (Leitner por perfil) ----------
+// Práctica de recuperación + espaciado (evidencia: ~3x retención frente a solo
+// repetir). Aditivo: p.review = { [textoPregunta]: { box:1-5, due:'YYYY-MM-DD' } }.
+// Sin datos se comporta como el quiz de siempre (todo "nuevo" → al azar).
+const SR_INTERVALS = { 1: 1, 2: 2, 3: 4, 4: 7, 5: 15 };   // días hasta el próximo repaso por caja
+function addDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function getReview() {
+  const p = boti.getProfile();
+  if (!p) return null;
+  if (!p.review || typeof p.review !== 'object') p.review = {};
+  return p.review;
+}
+function srUpdate(key, ok) {
+  const rev = getReview();
+  if (!rev || !key) return;
+  const cur = rev[key] ?? { box: 0 };
+  const box = ok ? Math.min((cur.box || 0) + 1, 5) : 1;   // acierto sube de caja; fallo vuelve a la 1
+  rev[key] = { box, due: addDays(today, SR_INTERVALS[box] ?? 1) };
+  boti.persist();
+}
+/** Ordena el pool: vencidas (toca repasar) primero, luego nuevas, luego no vencidas. */
+function srPick(pool, n, keyFn) {
+  const rev = getReview() ?? {};
+  const due = [], fresh = [], future = [];
+  for (const item of pool) {
+    const st = rev[keyFn(item)];
+    if (!st) fresh.push(item);
+    else if (st.due <= today) due.push(item);
+    else future.push(item);
+  }
+  due.sort((a, b) => (rev[keyFn(a)].box - rev[keyFn(b)].box)
+    || (rev[keyFn(a)].due < rev[keyFn(b)].due ? -1 : 1));   // más urgente (caja baja / más vencida) primero
+  return [...due, ...shuffled(fresh), ...shuffled(future)].slice(0, n);
+}
+function dueCount(pool, keyFn) {
+  const rev = getReview() ?? {};
+  return pool.filter((it) => { const s = rev[keyFn(it)]; return s && s.due <= today; }).length;
+}
+
 async function startQuiz() {
   if (mode === 'quiz') { exitSpecialModes(); return; }
   exitSpecialModes();
@@ -471,13 +514,16 @@ async function startQuiz() {
   system.resetView();          // vista completa: se ven todos los planetas
   // Igual que en el tour: si el mic 🎤 interrumpe la intro, NO se lanza la pregunta
   const gen = audio.getSpeechGen();
+  const due = dueCount(QUIZ_QUESTIONS, (q) => q.question);
   quizState = {
-    questions: shuffled(QUIZ_QUESTIONS).slice(0, 5)
-      .map((q) => ({ q: q.question, answers: [q.answer], hint: q.hint })),
+    questions: srPick(QUIZ_QUESTIONS, 5, (q) => q.question)
+      .map((q) => ({ q: q.question, answers: [q.answer], hint: q.hint, rk: q.question })),
     idx: 0, correct: 0, kind: 'quiz',
   };
   showQuestionCard();
-  await audio.speak('¡Vamos a jugar! Yo pregunto y tú tocas el planeta.');
+  await audio.speak(due >= 2
+    ? '¡Hora de repasar lo que aprendiste! Yo pregunto y tú tocas el planeta.'
+    : '¡Vamos a jugar! Yo pregunto y tú tocas el planeta.');
   if (quizState && gen === audio.getSpeechGen()) askCurrent();
 }
 
@@ -495,7 +541,8 @@ async function startLevels() {
   }
   const levelData = QUIZ_LEVELS[lvl];
   quizState = {
-    questions: shuffled(levelData.questions).map((q) => ({ q: q.q, answers: q.answers, hint: q.hint })),
+    questions: srPick(levelData.questions, levelData.questions.length, (q) => q.q)
+      .map((q) => ({ q: q.q, answers: q.answers, hint: q.hint, rk: q.q })),
     idx: 0, correct: 0, kind: 'levels', level: lvl,
   };
   showQuestionCard();
@@ -524,6 +571,7 @@ async function handleQuizTap(def) {
   const q = quizState.questions[quizState.idx % quizState.questions.length];
   system.markUserActivity();
   if (q.answers.includes(def.id)) {
+    if (quizState.kind === 'quiz' || quizState.kind === 'levels') srUpdate(q.rk, true);
     quizState.correct++;
     quizState.idx++;
     if (quizState.kind === 'quiz2') {
@@ -577,7 +625,8 @@ async function handleQuizTap(def) {
     showQuestionCard();
     askCurrent();
   } else {
-    // Error: pista amable, sin penalización
+    // Error: pista amable, sin penalización (pero baja a la caja 1 para repasarla pronto)
+    if (quizState.kind === 'quiz' || quizState.kind === 'levels') srUpdate(q.rk, false);
     audio.gentle();
     await audio.speak(q.hint);
     if (quizState && gen === audio.getSpeechGen()) askCurrent();
