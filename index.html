@@ -115,6 +115,7 @@
     <div class="panel-row" aria-label="Mostrar u ocultar cosas">
       <button id="toggle-orbits" class="mini-btn" data-tip="Líneas de órbita" aria-label="Mostrar líneas de órbita">⭕</button>
       <button id="toggle-labels" class="mini-btn" data-tip="Nombres de planetas" aria-label="Mostrar nombres de los planetas">🔤</button>
+      <button id="toggle-captions" class="mini-btn" data-tip="Subtítulos" aria-label="Mostrar subtítulos de lo que se dice">💬</button>
     </div>
     <div class="panel-row" aria-label="Estado de Boti (para los grandes)">
       <span id="chip-mic"   class="status-chip" data-tip="Micrófono" aria-label="Estado del micrófono">🎤✅</span>
@@ -166,6 +167,9 @@
   <div id="sticker-pop" class="hidden" aria-live="polite">
     <span id="sticker-pop-emoji">⭐</span>
   </div>
+
+  <!-- Subtítulos 💬 de lo que se narra (se activan en el panel 🎨) -->
+  <div id="caption" class="hidden" aria-live="polite"></div>
 
   <script type="module" src="js/main.js"></script>
 </body>

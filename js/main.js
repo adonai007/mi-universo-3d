@@ -44,6 +44,20 @@ system.setAmbient(settings.ambient);
 system.setOrbitLinesVisible(settings.orbitLines);
 system.setLabelsVisible(settings.labels);
 
+// ---------- Subtítulos 💬 (accesibilidad: muestra lo que se narra) ----------
+// audio.speak() nos pasa el texto ORIGINAL; lo pintamos solo si el ajuste está
+// encendido. Se auto-oculta por duración y el mic 🎤/🔇 lo limpia (handler null).
+const captionEl = document.getElementById('caption');
+let captionTimer = null;
+audio.setCaptionHandler((text) => {
+  if (!captionEl) return;
+  clearTimeout(captionTimer);
+  if (!settings.captions || !text) { captionEl.classList.add('hidden'); return; }
+  captionEl.textContent = text;
+  captionEl.classList.remove('hidden');
+  captionTimer = setTimeout(() => captionEl.classList.add('hidden'), Math.max(2500, text.length * 70));
+});
+
 // Estado global de modos: 'free' | 'tour' | 'compare' | 'galaxy' | 'quiz' | 'levels'
 //                       | 'quiz2' | 'gravity' | 'moon' | 'eclipse' | 'scale'
 let mode = 'free';
@@ -330,6 +344,10 @@ async function toggleScale() {
   if (token !== visitToken || mode !== 'scale') return;
   setCardSpeaking(true);
   await audio.speak('¡Guau! ¡Así de lejos viven DE VERDAD los planetas! Desde Neptuno, el Sol se ve como una estrellita chiquitita.');
+  // Ataca el error #1 (espacio "lleno" / planetas en fila y equidistantes)
+  if (token === visitToken && gen === audio.getSpeechGen()) {
+    await audio.speak('Entre planeta y planeta hay puro vacío oscuro: ¡muchísimo espacio sin nada! Y no están en fila ni igual de separados, cada uno vive a su propia distancia.');
+  }
   if (token === visitToken && gen === audio.getSpeechGen()) {
     await audio.speak('Por eso los dibujamos más cerca: ¡para poder verlos a todos juntos!');
   }
@@ -506,6 +524,23 @@ function dueCount(pool, keyFn) {
   return pool.filter((it) => { const s = rev[keyFn(it)]; return s && s.due <= today; }).length;
 }
 
+// ---------- dificultad del quiz por edad 🎯 ----------
+// Reto acorde a la edad (la performance ya la ajusta el repaso espaciado). Los
+// grandes (7-10) reciben además preguntas más difíciles de los niveles 'orden'
+// y 'temperatura'. Todo normalizado a { question, answers, hint }.
+function quizPool(age) {
+  const base = QUIZ_QUESTIONS.map((q) => ({ question: q.question, answers: [q.answer], hint: q.hint }));
+  if ((age ?? 5) <= 6) return base;
+  const seen = new Set(base.map((q) => q.question));
+  const harder = QUIZ_LEVELS.slice(2).flatMap((lv) =>
+    lv.questions.map((q) => ({ question: q.q, answers: q.answers, hint: q.hint })));
+  return [...base, ...harder.filter((q) => !seen.has(q.question) && (seen.add(q.question), true))];
+}
+function quizLen(age) {
+  const a = age ?? 5;
+  return a <= 5 ? 4 : a <= 7 ? 5 : 6;   // atención por edad
+}
+
 async function startQuiz() {
   if (mode === 'quiz') { exitSpecialModes(); return; }
   exitSpecialModes();
@@ -514,10 +549,12 @@ async function startQuiz() {
   system.resetView();          // vista completa: se ven todos los planetas
   // Igual que en el tour: si el mic 🎤 interrumpe la intro, NO se lanza la pregunta
   const gen = audio.getSpeechGen();
-  const due = dueCount(QUIZ_QUESTIONS, (q) => q.question);
+  const age = boti.getProfile()?.age;
+  const pool = quizPool(age);
+  const due = dueCount(pool, (q) => q.question);
   quizState = {
-    questions: srPick(QUIZ_QUESTIONS, 5, (q) => q.question)
-      .map((q) => ({ q: q.question, answers: [q.answer], hint: q.hint, rk: q.question })),
+    questions: srPick(pool, quizLen(age), (q) => q.question)
+      .map((q) => ({ q: q.question, answers: q.answers, hint: q.hint, rk: q.question })),
     idx: 0, correct: 0, kind: 'quiz',
   };
   showQuestionCard();
@@ -828,6 +865,7 @@ const ui = initUI(settings, {
       case 'ambient': system.setAmbient(value); break;
       case 'orbitLines': system.setOrbitLinesVisible(value); break;
       case 'labels': system.setLabelsVisible(value); break;
+      case 'captions': if (!value && captionEl) captionEl.classList.add('hidden'); break;
     }
   },
   // Chips de estado del panel 🎨 (ui.js los repinta al abrir el panel)

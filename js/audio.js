@@ -9,6 +9,7 @@ let externalAudio = null;     // <audio> de ElevenLabs registrado por boti.js
 let speechUnlocked = false;   // ya hicimos el "prime" dentro de un gesto del usuario
 let waitedForVoices = false;  // la espera de voiceschanged se hace UNA vez por sesión
 let voicesWait = null;        // espera compartida: speaks concurrentes esperan JUNTOS
+let captionHandler = null;    // subtítulos: main.js pinta el texto narrado si están encendidos
 
 function audioCtx() {
   if (!ctx) {
@@ -301,10 +302,14 @@ function waitForVoices(timeoutMs = 1200) {
  * silencio 🔇, motor mudo (onstart nunca llega), error o interrupción.
  */
 export async function speak(text) {
-  if (muted || !('speechSynthesis' in window)) return false;
   // La voz NO lee emojis ni asteriscos (la burbuja muestra el original)
   const clean = cleanForSpeech(text);
   if (!clean) return false;
+  // Subtítulos: el texto ORIGINAL (con emojis) a quien los pinte, incluso en
+  // mudo 🔇 o sin motor de voz (ahí los subtítulos valen aún más). El handler
+  // decide si se muestran según el ajuste del usuario.
+  captionHandler?.(text);
+  if (muted || !('speechSynthesis' in window)) return false;
   const gen = speechGen;
   // Primer speak con la lista de voces vacía: esperar voiceschanged un momento
   // (una sola vez por sesión). La espera es COMPARTIDA: dos speaks concurrentes
@@ -380,6 +385,9 @@ export function stopSpeaking() {
 /** Generación global de habla: subirla invalida narraciones y tours en curso. */
 export function getSpeechGen() { return speechGen; }
 
+/** Subtítulos 💬: main.js registra aquí cómo pintar/ocultar el texto narrado. */
+export function setCaptionHandler(fn) { captionHandler = typeof fn === 'function' ? fn : null; }
+
 /** boti.js registra aquí su <audio> de ElevenLabs para silenciarlo todo junto. */
 export function registerExternalAudio(el) { externalAudio = el; }
 
@@ -392,6 +400,7 @@ export function interruptSpeech() {
   speechGen++;
   stopSpeaking();
   stopMelody();
+  captionHandler?.(null);   // el mic 🎤 / 🔇 también limpia el subtítulo
   if (externalAudio) {
     try { externalAudio.pause(); } catch { /* ya estaba parado */ }
     externalAudio = null;

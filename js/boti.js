@@ -110,6 +110,8 @@ export function initBoti() {
   let currentAudio = null;
   let helpHandler = null;   // lo inyecta main.js: lanza el recorrido del modo ayuda ❓
   let lastExchange = null;  // {q, a} del último intercambio: da continuidad ("dame más")
+  let sessionPlaySec = 0;   // segundos jugados de corrido esta sesión (para el descanso)
+  let breakNudged = false;  // el aviso de descanso: una vez por sesión
 
   // Desbloqueo de la voz en el PRIMER gesto (bienvenida, mic, canvas, lo que
   // sea): Chrome Android exige un speak dentro de un gesto del usuario o Boti
@@ -150,7 +152,24 @@ export function initBoti() {
     p.stickers = readJSON(STICKERS_KEY, []);
     p.quiz = readJSON(QUIZ_KEY, { level: 0 });
     recordDailyProgress(p);   // foto diaria para el modo padres 📈
+    recordPlayTime(p);        // tiempo de juego + aviso de descanso ⏱️
     saveProfiles(profiles);
+  }
+
+  // ---------- uso saludable ⏱️ (AAP) ----------
+  // Tiempo de juego del día (campo aditivo p.play = {d, sec}) y un aviso suave
+  // de descanso a los ~25 min de corrido. Solo cuenta con la pestaña visible.
+  function recordPlayTime(p) {
+    if (document.visibilityState !== 'visible') return;
+    const d = new Date().toISOString().slice(0, 10);
+    if (!p.play || p.play.d !== d) p.play = { d, sec: 0 };
+    p.play.sec += 8;            // snapshotProfile corre cada 8 s
+    sessionPlaySec += 8;
+    if (!breakNudged && sessionPlaySec >= 1500) {
+      breakNudged = true;
+      // Habla suave: no aborta el tour ni la melodía (el mic sí la mata)
+      botiSpeak('¡Llevas un buen rato de astronauta! ¿Descansamos los ojitos un ratito y le cuentas a un grande lo que viste? 👀', { interrupt: false });
+    }
   }
   setInterval(snapshotProfile, 8000);
   window.addEventListener('beforeunload', snapshotProfile);
@@ -761,6 +780,13 @@ export function initBoti() {
     return `Desde el ${fmtDay(ref.d)}: ${bits.join(', ')}. ¡Va mejorando!`;
   }
 
+  /** Conceptos dominados: preguntas del repaso espaciado en caja ≥3 (p.review lo escribe main.js). */
+  function conceptsMastered(p) {
+    const rev = p?.review;
+    if (!rev || typeof rev !== 'object') return 0;
+    return Object.values(rev).filter((s) => s && s.box >= 3).length;
+  }
+
   /** Bloque "boletín": progreso del juego por perfil (planetas, pegatinas, nivel…). */
   function appendBulletin(box, p) {
     const m = profileMetrics(p);
@@ -770,7 +796,9 @@ export function initBoti() {
       ['🪐', `Planetas visitados: ${m.planets}/${VISIT_IDS.size}`, m.visitedIds.map(bodyName).join(', ')],
       ['⭐', `Pegatinas: ${m.stickers}/${STICKERS.length}`, ''],
       ['🏆', `Nivel de quiz: ${m.quizLevel}`, ''],
+      ['🧠', `Conceptos dominados: ${conceptsMastered(p)}`, ''],
       ['❓', `Preguntas hechas: ${m.questions}`, ''],
+      ['⏱️', `Tiempo de juego hoy: ${Math.round((p?.play?.sec ?? 0) / 60)} min`, ''],
       ['🗓️', `Última vez que jugó: ${fmtDay(m.last) || '—'}`, ''],
     ];
     for (const [icon, label, sub] of rows) {

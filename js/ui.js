@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS = {
   orbitLines: true,
   labels: true,
   sound: true,
+  captions: false,
 };
 
 function loadJSON(key, fallback) {
@@ -223,6 +224,17 @@ export function initUI(settings, handlers) {
     handlers.onSettingChange('labels', settings.labels);
   });
   toggleLabels.classList.toggle('active', settings.labels);
+
+  const toggleCaptions = $('toggle-captions');
+  if (toggleCaptions) {
+    toggleCaptions.addEventListener('click', () => {
+      settings.captions = !settings.captions;
+      toggleCaptions.classList.toggle('active', settings.captions);
+      saveSettings(settings);
+      handlers.onSettingChange('captions', settings.captions);
+    });
+    toggleCaptions.classList.toggle('active', settings.captions);
+  }
 
   // --- Panel construye tu planeta 🪐 ---
   const buildCfg = { color: '#4f8cff', size: 1.8, rings: false, moons: 0 };
