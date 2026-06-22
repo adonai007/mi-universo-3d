@@ -54,6 +54,10 @@ export function initUI(settings, handlers) {
     games: $('games-row'),
   };
 
+  const syncPanelState = () => {
+    document.body.classList.toggle('games-open', !panels.games.classList.contains('hidden'));
+  };
+
   const closeAllPanels = () => {
     panels.style.classList.add('hidden');
     panels.build.classList.add('hidden');
@@ -61,6 +65,7 @@ export function initUI(settings, handlers) {
     $('btn-style').classList.remove('active');
     $('btn-build').classList.remove('active');
     $('btn-games').classList.remove('active');
+    syncPanelState();
   };
 
   const togglePanel = (panel, btn) => {
@@ -74,6 +79,7 @@ export function initUI(settings, handlers) {
       panels[panel].classList.remove('hidden');
       btn.classList.add('active');
     }
+    syncPanelState();
   };
 
   // --- Botonera principal ---
@@ -94,6 +100,7 @@ export function initUI(settings, handlers) {
     if (open) {
       panels.games.classList.remove('hidden');
       $('btn-games').classList.add('active');
+      syncPanelState();
     }
   });
 
@@ -106,6 +113,7 @@ export function initUI(settings, handlers) {
   $('btn-build').addEventListener('click', (e) => {
     panels.games.classList.add('hidden');
     $('btn-games').classList.remove('active');
+    syncPanelState();
     togglePanel('build', e.currentTarget);
   });
 

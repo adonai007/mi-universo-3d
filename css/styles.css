@@ -424,21 +424,59 @@ html, body {
   #boti-type { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 320px); }
 }
 
-/* Teléfonos angostos: la botonera (8 botones) no entra en una fila → se
-   encoge para que TODOS quepan en pantalla (Home y Sonido dejaban de verse).
-   El robot+mic ya subieron a su fila propia con la regla de arriba. El mic y
-   los botones flotantes (❓ 🔭) NO se tocan (solo #toolbar/#games-row). */
+/* Telefonos angostos: la botonera se parte en filas sin bajar de 64px.
+   Boti sube otra fila si el cajon de juegos esta abierto. */
 @media (max-width: 480px) {
-  #toolbar, #games-row { gap: 5px; padding: 8px 9px; max-width: 100vw; }
+  #toolbar {
+    display: grid;
+    grid-template-columns: repeat(4, 64px);
+    gap: 8px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: max-content;
+    max-width: calc(100vw - 20px);
+  }
+  #games-row {
+    display: grid;
+    grid-template-columns: repeat(3, 64px);
+    gap: 8px;
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 152px);
+    width: max-content;
+    max-width: calc(100vw - 20px);
+  }
   #toolbar .big-btn, #games-row .big-btn {
-    width: 44px; height: 44px; min-width: 44px; min-height: 44px; font-size: 1.4rem;
+    width: 64px;
+    height: 64px;
+    min-width: 64px;
+    min-height: 64px;
+    font-size: 1.9rem;
+  }
+  #boti-hud {
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 152px);
+    transform: scale(0.86);
+    transform-origin: left bottom;
+  }
+  body.games-open #boti-hud {
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 304px);
+  }
+  #boti-type,
+  .side-panel {
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 152px);
+  }
+  body.games-open #boti-type {
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 304px);
+  }
+  #caption {
+    bottom: calc(max(10px, env(safe-area-inset-bottom)) + 300px);
+    font-size: 1rem;
+  }
+  #toolbar [data-tip]::after,
+  #games-row [data-tip]::after {
+    display: none;
   }
 }
 @media (max-width: 380px) {
-  #toolbar, #games-row { gap: 3px; padding: 6px 6px; }
-  #toolbar .big-btn, #games-row .big-btn {
-    width: 40px; height: 40px; min-width: 40px; min-height: 40px; font-size: 1.25rem;
-  }
+  #toolbar, #games-row { gap: 6px; }
+  #boti-hud { transform: scale(0.8); }
 }
 
 #boti {
